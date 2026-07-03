@@ -151,11 +151,20 @@
     catch (e) { reason = String(e); }
   }
 
-  async function loadGeo() {
-    geoLoading = true;
-    try { geo = await ExternalIP(); }
-    catch (e) { geo = null; }
-    finally { geoLoading = false; }
+  // loadGeo с ретраями: сразу после подключения нода (Reality-хендшейк) может быть
+  // ещё не готова — первые запросы падают, поэтому повторяем несколько раз.
+  async function loadGeo(attempt = 0) {
+    if (attempt === 0) geoLoading = true;
+    try {
+      geo = await ExternalIP();
+      geoLoading = false;
+    } catch (e) {
+      if (attempt < 4 && state === "running") {
+        setTimeout(() => loadGeo(attempt + 1), 1500);
+      } else {
+        geo = null; geoLoading = false;
+      }
+    }
   }
   // flagEmoji превращает 2-буквенный код страны в эмодзи-флаг.
   function flagEmoji(cc: string): string {
@@ -462,7 +471,7 @@
             <span class="geo-load">Определяю внешний IP…</span>
           {:else if geo}
             <span class="geo-flag">{flagEmoji(geo.countryCode)}</span>
-            <span class="geo-loc">{geo.country}{geo.city ? ", " + geo.city : ""}</span>
+            <span class="geo-loc">{geo.country || geo.countryCode}{geo.city ? ", " + geo.city : ""}</span>
             <span class="geo-ip">{geo.ip}</span>
           {:else}
             <span class="geo-load">IP не определён</span>

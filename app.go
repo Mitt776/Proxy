@@ -634,29 +634,77 @@ type IPInfo struct {
 
 // ExternalIP запрашивает внешний IP и страну ЧЕРЕЗ локальный mixed-прокси —
 // то есть показывает, откуда «видит» пользователя интернет после подключения.
+// Пробуем несколько сервисов: если один недоступен/лимитит — берём следующий.
 func (a *App) ExternalIP() (IPInfo, error) {
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", a.mixedPort))
 	hc := &http.Client{
-		Timeout:   10 * time.Second,
+		Timeout:   7 * time.Second,
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 	}
-	// ip-api.com — бесплатно, без ключа, по HTTP (проходит через mixed-прокси).
-	resp, err := hc.Get("http://ip-api.com/json/?fields=status,message,country,countryCode,city,query")
+	for _, provider := range []func(*http.Client) (IPInfo, error){geoIPAPI, geoIPWhoIs, geoIPInfo} {
+		if info, err := provider(hc); err == nil && info.IP != "" {
+			return info, nil
+		}
+	}
+	return IPInfo{}, fmt.Errorf("не удалось определить внешний IP")
+}
+
+// geoIPAPI — ip-api.com (полное имя страны + код + город; HTTP, но без ключа).
+func geoIPAPI(hc *http.Client) (IPInfo, error) {
+	resp, err := hc.Get("http://ip-api.com/json/?fields=status,country,countryCode,city,query")
 	if err != nil {
 		return IPInfo{}, err
 	}
 	defer resp.Body.Close()
-
-	var r struct {
-		Status, Message, Country, CountryCode, City, Query string
-	}
+	var r struct{ Status, Country, CountryCode, City, Query string }
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return IPInfo{}, err
 	}
 	if r.Status != "success" {
-		return IPInfo{}, fmt.Errorf("гео-сервис: %s", r.Message)
+		return IPInfo{}, fmt.Errorf("ip-api: %s", r.Status)
 	}
 	return IPInfo{IP: r.Query, Country: r.Country, CountryCode: r.CountryCode, City: r.City}, nil
+}
+
+// geoIPWhoIs — ipwho.is (HTTPS, полное имя + код + город).
+func geoIPWhoIs(hc *http.Client) (IPInfo, error) {
+	resp, err := hc.Get("https://ipwho.is/")
+	if err != nil {
+		return IPInfo{}, err
+	}
+	defer resp.Body.Close()
+	var r struct {
+		IP          string `json:"ip"`
+		Success     bool   `json:"success"`
+		Country     string `json:"country"`
+		CountryCode string `json:"country_code"`
+		City        string `json:"city"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return IPInfo{}, err
+	}
+	if !r.Success {
+		return IPInfo{}, fmt.Errorf("ipwho.is: fail")
+	}
+	return IPInfo{IP: r.IP, Country: r.Country, CountryCode: r.CountryCode, City: r.City}, nil
+}
+
+// geoIPInfo — ipinfo.io (HTTPS; страна только кодом, но как надёжный фолбэк).
+func geoIPInfo(hc *http.Client) (IPInfo, error) {
+	resp, err := hc.Get("https://ipinfo.io/json")
+	if err != nil {
+		return IPInfo{}, err
+	}
+	defer resp.Body.Close()
+	var r struct{ IP, Country, City string }
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return IPInfo{}, err
+	}
+	if r.IP == "" {
+		return IPInfo{}, fmt.Errorf("ipinfo: пусто")
+	}
+	// Country тут — двухбуквенный код; полного имени нет.
+	return IPInfo{IP: r.IP, Country: "", CountryCode: r.Country, City: r.City}, nil
 }
 
 // --- Автообновление подписок ---
