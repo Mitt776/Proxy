@@ -1,0 +1,28 @@
+# --- Wails / frontend ---
+frontend/node_modules/
+frontend/wailsjs/
+# Собранный фронтенд (пересобирается `wails build`); каталог держим ради go:embed.
+frontend/dist/*
+!frontend/dist/.gitkeep
+
+# --- Сборка и упакованный релиз ---
+build/bin/
+release/
+
+# --- Рантайм-данные приложения ---
+data/
+*.log
+
+# --- Ядра, гео-базы и rule-set'ы ---
+# Большие сторонние бинарники не храним в git — они в GitHub Releases (архив).
+assets/*.exe
+assets/*.dll
+assets/*.db
+assets/*.srs
+
+# --- Мусор ОС/редакторов ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
