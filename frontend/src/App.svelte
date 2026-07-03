@@ -7,8 +7,11 @@
     GetProxies, SelectNode, TestDelay, SetRouting, GetSettings,
     GetAutostart, SetAutostart, SetMinimizeToTray,
     PickCoreFile, ResetCorePath,
+    ProfileConfigJSON, ProfileRaw,
+    ExternalIP, ProfileQR, ImportQRImage, SetSubUpdateHours, SetCustomRules,
+    SetBlockQUIC,
   } from "../wailsjs/go/main/App";
-  import { EventsOn } from "../wailsjs/runtime/runtime";
+  import { EventsOn, ClipboardSetText, ClipboardGetText } from "../wailsjs/runtime/runtime";
   import type { profile } from "../wailsjs/go/models";
 
   let info = { coreVersion: "", coreFound: false, assetsDir: "", dataDir: "", state: "stopped" };
@@ -25,10 +28,21 @@
   // маршрутизация
   let routingMode = "global";
   let blockAds = false;
+  let blockQUIC = true;
 
   // системные настройки
   let autostart = false;
   let minimizeToTray = true;
+  let subUpdateHours = 0;
+
+  // свои правила маршрутизации (по домену на строку)
+  let rDirect = "", rProxy = "", rBlock = "";
+  let showRules = false;
+
+  // внешний IP/гео и QR
+  let geo: { ip: string; country: string; countryCode: string; city: string } | null = null;
+  let geoLoading = false;
+  let qrImg = "";
 
   // ноды и статистика (Clash API)
   type NodeRow = { name: string; type: string; delay: number };
@@ -37,13 +51,17 @@
   let testingAll = false;
   let stats = { downSpeed: 0, upSpeed: 0, downTotal: 0, upTotal: 0, connections: 0 };
 
-  // форма добавления
+  // форма добавления (имя формируется автоматически из ссылки/подписки)
   let addMode: "manual" | "sub" = "manual";
-  let fName = "";
   let fRaw = "";
   let fURL = "";
   let addErr = "";
   let adding = false;
+
+  // контекстное меню профиля (правый клик)
+  let menu = { show: false, x: 0, y: 0, id: "" };
+  let toast = "";
+  let toastTimer: ReturnType<typeof setTimeout>;
 
   const stateLabel: Record<string, string> = {
     stopped: "Отключено", starting: "Запуск…", running: "Подключено", error: "Ошибка",
@@ -57,7 +75,12 @@
     try {
       const s = await GetSettings();
       routingMode = s.routingMode; blockAds = s.blockAds; enableTUN = s.enableTUN;
+      blockQUIC = !s.allowQuic;
       minimizeToTray = s.minimizeToTray;
+      subUpdateHours = s.subUpdateHours || 0;
+      rDirect = (s.directDomains || []).join("\n");
+      rProxy = (s.proxyDomains || []).join("\n");
+      rBlock = (s.blockDomains || []).join("\n");
       autostart = await GetAutostart();
     } catch (e) { /* игнор */ }
 
@@ -66,12 +89,13 @@
       state = p.state;
       reason = p.reason || "";
       if (["stopped", "running", "error"].includes(state)) busy = false;
-      if (state === "running" && prev !== "running") loadProxies();
+      if (state === "running" && prev !== "running") { loadProxies(); loadGeo(); }
       if (state === "stopped" || state === "error") {
-        nodes = []; nowNode = "";
+        nodes = []; nowNode = ""; geo = null;
         stats = { downSpeed: 0, upSpeed: 0, downTotal: 0, upTotal: 0, connections: 0 };
       }
     });
+    EventsOn("profiles:changed", () => { loadProfiles(); });
     EventsOn("core:log", (line: string) => {
       logs = [...logs.slice(-1999), line];
       queueMicrotask(() => { if (logBox) logBox.scrollTop = logBox.scrollHeight; });
@@ -113,6 +137,10 @@
     try { await SetRouting(routingMode, blockAds); }
     catch (e) { reason = String(e); }
   }
+  async function changeBlockQUIC() {
+    try { await SetBlockQUIC(blockQUIC); }
+    catch (e) { reason = String(e); }
+  }
 
   async function changeAutostart() {
     try { await SetAutostart(autostart); }
@@ -121,6 +149,51 @@
   async function changeMinimize() {
     try { await SetMinimizeToTray(minimizeToTray); }
     catch (e) { reason = String(e); }
+  }
+
+  async function loadGeo() {
+    geoLoading = true;
+    try { geo = await ExternalIP(); }
+    catch (e) { geo = null; }
+    finally { geoLoading = false; }
+  }
+  // flagEmoji превращает 2-буквенный код страны в эмодзи-флаг.
+  function flagEmoji(cc: string): string {
+    if (!cc || cc.length !== 2) return "🌐";
+    return String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+  }
+
+  async function pasteClip() {
+    try {
+      const t = (await ClipboardGetText())?.trim();
+      if (!t) return;
+      if (addMode === "manual") fRaw = t; else fURL = t;
+    } catch (e) { addErr = String(e); }
+  }
+
+  async function showQR() {
+    const id = menu.id; closeMenu();
+    try { qrImg = await ProfileQR(id); }
+    catch (e) { reason = String(e); }
+  }
+  async function importQR() {
+    addErr = "";
+    try {
+      const p = await ImportQRImage();
+      if (p) await loadProfiles();
+    } catch (e) { addErr = String(e); }
+  }
+
+  async function changeSubHours() {
+    try { await SetSubUpdateHours(subUpdateHours); }
+    catch (e) { reason = String(e); }
+  }
+  const toLines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+  async function saveRules() {
+    try {
+      await SetCustomRules(toLines(rDirect), toLines(rProxy), toLines(rBlock));
+      showToast("Правила сохранены (применятся при подключении)");
+    } catch (e) { reason = String(e); }
   }
 
   async function pickCore() {
@@ -149,12 +222,12 @@
     try {
       if (addMode === "manual") {
         if (!fRaw.trim()) throw new Error("Вставь ссылки или JSON");
-        await AddManualProfile(fName, fRaw);
+        await AddManualProfile("", fRaw);
       } else {
         if (!fURL.trim()) throw new Error("Укажи URL подписки");
-        await AddSubscriptionProfile(fName, fURL);
+        await AddSubscriptionProfile("", fURL);
       }
-      fName = ""; fRaw = ""; fURL = "";
+      fRaw = ""; fURL = "";
       await loadProfiles();
     } catch (e) {
       addErr = String(e);
@@ -169,6 +242,28 @@
     catch (e) { reason = String(e); }
   }
   async function remove(id: string) { await DeleteProfile(id); await loadProfiles(); }
+
+  function showToast(msg: string) {
+    toast = msg;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toast = ""), 1800);
+  }
+  function openMenu(e: MouseEvent, id: string) {
+    e.preventDefault();
+    menu = { show: true, x: e.clientX, y: e.clientY, id };
+  }
+  function closeMenu() { menu = { ...menu, show: false }; }
+
+  async function copyJSON() {
+    const id = menu.id; closeMenu();
+    try { await ClipboardSetText(await ProfileConfigJSON(id)); showToast("JSON-конфиг скопирован"); }
+    catch (e) { reason = String(e); }
+  }
+  async function copyRaw() {
+    const id = menu.id; closeMenu();
+    try { await ClipboardSetText(await ProfileRaw(id)); showToast("Исходные ссылки скопированы"); }
+    catch (e) { reason = String(e); }
+  }
 
   async function connect() {
     reason = ""; busy = true;
@@ -220,7 +315,8 @@
 
       <div class="plist">
         {#each profiles as p (p.id)}
-          <div class="pcard" class:active={p.id === activeId}>
+          <div class="pcard" class:active={p.id === activeId}
+               on:contextmenu={(e) => openMenu(e, p.id)}>
             <label class="pmain">
               <input type="radio" name="active" checked={p.id === activeId} on:change={() => activate(p.id)} disabled={connected} />
               <div class="pinfo">
@@ -248,7 +344,6 @@
           <button class:on={addMode === "manual"} on:click={() => (addMode = "manual")}>Ручной</button>
           <button class:on={addMode === "sub"} on:click={() => (addMode = "sub")}>Подписка</button>
         </div>
-        <input class="fld" placeholder="Название (необязательно)" bind:value={fName} />
         {#if addMode === "manual"}
           <textarea class="fld" rows="4" spellcheck="false"
             placeholder="vless://…  vmess://…  hysteria2://…  (по одной в строке) или JSON-конфиг"
@@ -256,6 +351,11 @@
         {:else}
           <input class="fld" placeholder="https://…/subscription" bind:value={fURL} />
         {/if}
+        <div class="add-tools">
+          <button class="mini wide" on:click={pasteClip} title="Вставить из буфера обмена">📥 Вставить</button>
+          <button class="mini wide" on:click={importQR} title="Импорт ноды из картинки с QR-кодом">▦ Импорт из QR</button>
+        </div>
+        <div class="hint">Название сформируется автоматически из ссылки. Правый клик по профилю — QR / копировать конфиг.</div>
         {#if addErr}<div class="error">{addErr}</div>{/if}
         <button class="btn add-btn" on:click={add} disabled={adding}>
           {adding ? "Добавляю…" : "Добавить профиль"}
@@ -284,6 +384,10 @@
           <input type="checkbox" bind:checked={blockAds} on:change={changeRouting} disabled={connected} />
           Блок рекламы
         </label>
+        <label class="ads" title="Заставляет браузер использовать TCP вместо HTTP-3. Нужно для TCP-нод (vless-vision, xhttp), иначе ломаются Google/YouTube в TUN.">
+          <input type="checkbox" bind:checked={blockQUIC} on:change={changeBlockQUIC} disabled={connected} />
+          Резать QUIC (TUN)
+        </label>
       </div>
 
       <div class="sysrow">
@@ -296,6 +400,29 @@
           Сворачивать в трей при закрытии
         </label>
       </div>
+
+      <div class="routing">
+        <label class="rmode">
+          Обновлять подписки каждые
+          <input class="numfld" type="number" min="0" max="168" bind:value={subUpdateHours} on:change={changeSubHours} />
+          ч (0 — выкл)
+        </label>
+        <button class="mini wide" on:click={() => (showRules = !showRules)}>
+          {showRules ? "▾" : "▸"} Свои правила
+        </button>
+      </div>
+
+      {#if showRules}
+        <div class="rules">
+          <div class="hint">По одному домену на строку. Применяются при подключении, поверх пресетов.</div>
+          <div class="rules-grid">
+            <label>🟢 Напрямую<textarea rows="3" spellcheck="false" bind:value={rDirect} placeholder="example.com"></textarea></label>
+            <label>🔵 Через прокси<textarea rows="3" spellcheck="false" bind:value={rProxy} placeholder="youtube.com"></textarea></label>
+            <label>🔴 Блокировать<textarea rows="3" spellcheck="false" bind:value={rBlock} placeholder="ads.example.net"></textarea></label>
+          </div>
+          <button class="mini wide" on:click={saveRules}>Сохранить правила</button>
+        </div>
+      {/if}
 
       <div class="corerow">
         <span class="clbl">Ядро:</span>
@@ -328,6 +455,19 @@
           <div class="stat"><span class="lbl up">↑</span> {fmtSpeed(stats.upSpeed)}</div>
           <div class="stat muted">{stats.connections} соед.</div>
           <div class="stat muted">Σ {fmtBytes(stats.downTotal + stats.upTotal)}</div>
+        </div>
+
+        <div class="geo">
+          {#if geoLoading}
+            <span class="geo-load">Определяю внешний IP…</span>
+          {:else if geo}
+            <span class="geo-flag">{flagEmoji(geo.countryCode)}</span>
+            <span class="geo-loc">{geo.country}{geo.city ? ", " + geo.city : ""}</span>
+            <span class="geo-ip">{geo.ip}</span>
+          {:else}
+            <span class="geo-load">IP не определён</span>
+          {/if}
+          <button class="mini" title="Обновить" on:click={loadGeo} disabled={geoLoading}>⟳</button>
         </div>
 
         {#if nodes.length}
@@ -367,7 +507,30 @@
       </div>
     </section>
   </div>
+
+  {#if menu.show}
+    <div class="ctx" style="left:{menu.x}px; top:{menu.y}px;">
+      <button on:click={showQR}>▦ Показать QR-код</button>
+      <button on:click={copyJSON}>📋 Скопировать JSON-конфиг</button>
+      <button on:click={copyRaw}>🔗 Скопировать исходные ссылки</button>
+    </div>
+  {/if}
+
+  {#if toast}<div class="toast">{toast}</div>{/if}
+
+  {#if qrImg}
+    <div class="qr-overlay" role="button" tabindex="0"
+         on:click={() => (qrImg = "")} on:keydown={(e) => e.key === "Escape" && (qrImg = "")}>
+      <div class="qr-box" role="dialog" on:click|stopPropagation on:keydown|stopPropagation>
+        <div class="qr-title">Отсканируй в приложении на телефоне</div>
+        <img src={qrImg} alt="QR-код профиля" />
+        <button class="mini wide" on:click={() => (qrImg = "")}>Закрыть</button>
+      </div>
+    </div>
+  {/if}
 </main>
+
+<svelte:window on:click={closeMenu} on:keydown={(e) => e.key === "Escape" && closeMenu()} />
 
 <style>
   :global(body) { margin: 0; background: #0d1117; }
@@ -410,6 +573,35 @@
   .fld { background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; font-size: 13px; font-family: inherit; }
   textarea.fld { resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
   .fld:focus { outline: none; border-color: #388bfd; }
+  .hint { font-size: 11px; color: #545d68; line-height: 1.4; }
+
+  .ctx { position: fixed; z-index: 100; background: #1c2128; border: 1px solid #444c56; border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.5); display: flex; flex-direction: column; min-width: 210px; }
+  .ctx button { background: none; border: none; color: #e6edf3; text-align: left; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit; }
+  .ctx button:hover { background: #30363d; }
+
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 100; background: #1a7f37; color: #fff; font-size: 13px; font-weight: 700; padding: 9px 18px; border-radius: 999px; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+
+  .add-tools { display: flex; gap: 6px; }
+  .add-tools .mini.wide { flex: 1; }
+
+  .geo { display: flex; align-items: center; gap: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 7px 12px; font-size: 13px; }
+  .geo-flag { font-size: 16px; }
+  .geo-loc { font-weight: 700; }
+  .geo-ip { color: #7d8590; font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin-left: auto; }
+  .geo-load { color: #7d8590; }
+  .geo .mini { width: 24px; height: 24px; }
+
+  .numfld { width: 54px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 4px 6px; font-size: 13px; font-family: inherit; text-align: center; }
+
+  .rules { display: flex; flex-direction: column; gap: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 10px; }
+  .rules-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .rules-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #adbac7; }
+  .rules-grid textarea { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px; font-size: 12px; font-family: ui-monospace, Consolas, monospace; resize: vertical; }
+
+  .qr-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.65); display: flex; align-items: center; justify-content: center; }
+  .qr-box { background: #161b22; border: 1px solid #444c56; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+  .qr-title { font-size: 13px; color: #adbac7; font-weight: 700; }
+  .qr-box img { width: 260px; height: 260px; background: #fff; border-radius: 8px; padding: 8px; image-rendering: pixelated; }
 
   .right { gap: 12px; }
   .env { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Теги ключевых outbound-ов, на которые ссылаются route.final и Clash API.
@@ -91,14 +92,16 @@ func buildDNS(hasProxy bool) dnsOptions {
 	// У локального DNS detour не указываем: sing-box 1.12+ считает detour к пустому
 	// direct-outbound бессмысленным (прямой резолв — поведение по умолчанию).
 	local := dnsServer{Tag: dnsLocalTag, Type: "udp", Server: "223.5.5.5"}
+	// ipv4_only: не отдаём AAAA. Иначе на нодах без IPv6-выхода приложения лезут
+	// к Google/YouTube по IPv6 → чёрная дыра → «нет подключения к интернету».
 	if !hasProxy {
-		return dnsOptions{Servers: []dnsServer{local}, Final: dnsLocalTag, Strategy: "prefer_ipv4"}
+		return dnsOptions{Servers: []dnsServer{local}, Final: dnsLocalTag, Strategy: "ipv4_only"}
 	}
 	remote := dnsServer{Tag: dnsRemoteTag, Type: "https", Server: "1.1.1.1", Detour: ProxyTag}
 	return dnsOptions{
 		Servers:  []dnsServer{remote, local},
 		Final:    dnsRemoteTag,
-		Strategy: "prefer_ipv4",
+		Strategy: "ipv4_only",
 	}
 }
 
@@ -127,6 +130,17 @@ func buildRoute(opts Options) (rules []json.RawMessage, sets []ruleSet, err erro
 		return nil, nil, err
 	}
 
+	// Режем QUIC в TUN: на TCP-нодах UDP:443 не проходит, и браузер зависает на
+	// HTTP-3 вместо fallback на TCP (ломаются Google/YouTube/медиа). reject
+	// заставляет клиента сразу перейти на HTTP/2 поверх TCP.
+	if opts.EnableTUN && opts.BlockQUIC {
+		if err = appendJSON(&rules, map[string]interface{}{
+			"protocol": "quic", "action": "reject",
+		}); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	add := func(tag, file string) {
 		sets = append(sets, ruleSet{
 			Type:   "local",
@@ -134,6 +148,20 @@ func buildRoute(opts Options) (rules []json.RawMessage, sets []ruleSet, err erro
 			Format: "binary",
 			Path:   filepath.Join(opts.RuleSetDir, file),
 		})
+	}
+
+	// Свои правила (высший приоритет): блок → напрямую → через прокси.
+	hasProxy := len(opts.Nodes) > 0
+	if err = appendDomainRule(&rules, opts.BlockDomains, "reject", ""); err != nil {
+		return nil, nil, err
+	}
+	if err = appendDomainRule(&rules, opts.DirectDomains, "", DirectTag); err != nil {
+		return nil, nil, err
+	}
+	if hasProxy { // proxy-outbound существует только когда есть ноды
+		if err = appendDomainRule(&rules, opts.ProxyDomains, "", ProxyTag); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Блокировка рекламных доменов.
@@ -259,9 +287,11 @@ func buildInbounds(opts Options) ([]json.RawMessage, error) {
 
 	if opts.EnableTUN {
 		tun := tunInbound{
-			Type:                   "tun",
-			Tag:                    "tun-in",
-			Address:                []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
+			Type: "tun",
+			Tag:  "tun-in",
+			// Только IPv4: IPv6 в туннеле отключаем, т.к. большинство нод не имеют
+			// IPv6-выхода и трафик к dual-stack сайтам (Google) уходит в никуда.
+			Address:                []string{"172.19.0.1/30"},
 			AutoRoute:              true,
 			StrictRoute:            true,
 			Stack:                  opts.TUNStack,
@@ -273,6 +303,29 @@ func buildInbounds(opts Options) ([]json.RawMessage, error) {
 		}
 	}
 	return in, nil
+}
+
+// appendDomainRule добавляет правило по списку доменов (domain_suffix — совпадает
+// и с поддоменами). action != "" → это действие (напр. reject); иначе — outbound.
+// Пустой/из пробелов список пропускается.
+func appendDomainRule(dst *[]json.RawMessage, domains []string, action, outbound string) error {
+	var clean []string
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d != "" {
+			clean = append(clean, d)
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	rule := map[string]interface{}{"domain_suffix": clean}
+	if action != "" {
+		rule["action"] = action
+	} else {
+		rule["outbound"] = outbound
+	}
+	return appendJSON(dst, rule)
 }
 
 // appendJSON маршалит значения и добавляет их в срез RawMessage.

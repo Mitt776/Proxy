@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,10 +75,13 @@ func TestRoutingConfigValidates(t *testing.T) {
 	}
 	cfg, err := Generate(Options{
 		ClashSecret: "x", CacheDBPath: "cache.db",
-		Nodes:       []Node{node},
-		RoutingMode: RoutingRUDirect,
-		BlockAds:    true,
-		RuleSetDir:  assets,
+		Nodes:         []Node{node},
+		RoutingMode:   RoutingRUDirect,
+		BlockAds:      true,
+		RuleSetDir:    assets,
+		DirectDomains: []string{"example.com", "  LOCAL.dev "},
+		ProxyDomains:  []string{"youtube.com"},
+		BlockDomains:  []string{"ads.example.net"},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -110,7 +114,8 @@ func TestTUNConfigValidates(t *testing.T) {
 	cfg, err := Generate(Options{
 		ClashSecret: "x", CacheDBPath: "cache.db",
 		EnableTUN: true, TUNStack: "gvisor",
-		Nodes: []Node{node},
+		BlockQUIC: true,
+		Nodes:     []Node{node},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -124,5 +129,9 @@ func TestTUNConfigValidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sing-box check TUN ПРОВАЛИЛСЯ: %v\n%s\n---config---\n%s", err, out, cfg)
 	}
-	t.Log("✅ TUN-конфиг валиден по схеме sing-box 1.13")
+	// Убеждаемся, что правило reject QUIC действительно попало в конфиг.
+	if !strings.Contains(string(cfg), "\"quic\"") {
+		t.Fatalf("в TUN-конфиге нет правила reject QUIC:\n%s", cfg)
+	}
+	t.Log("✅ TUN-конфиг валиден, QUIC режется")
 }

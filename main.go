@@ -20,6 +20,17 @@ func main() {
 	// При автозапуске (--minimized) стартуем скрытыми в трее.
 	startHidden := hasFlag(system.MinimizedFlag)
 
+	// Single instance: вторая копия не запускается, а показывает уже открытое окно.
+	// Исключение — перезапуск с повышением прав ради TUN (это наш же процесс, ему
+	// нужно стартовать, пока прежний ещё закрывается).
+	var singleInstance *options.SingleInstanceLock
+	if !hasFlag(tunAutostartFlag) {
+		singleInstance = &options.SingleInstanceLock{
+			UniqueId:               "proxy-singbox-client-1f6a2b",
+			OnSecondInstanceLaunch: app.onSecondInstance,
+		}
+	}
+
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "Proxy",
@@ -28,11 +39,12 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		StartHidden:      startHidden,
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		OnBeforeClose:    app.beforeClose,
+		BackgroundColour:   &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		StartHidden:        startHidden,
+		SingleInstanceLock: singleInstance,
+		OnStartup:          app.startup,
+		OnShutdown:         app.shutdown,
+		OnBeforeClose:      app.beforeClose,
 		Bind: []interface{}{
 			app,
 		},

@@ -18,6 +18,19 @@ type Settings struct {
 	Autostart      bool   `json:"autostart"`      // запуск вместе с Windows
 	MinimizeToTray bool   `json:"minimizeToTray"` // сворачивать в трей вместо закрытия
 	CorePath       string `json:"corePath"`       // путь к альтернативному sing-box.exe (пусто = встроенное ядро)
+
+	SubUpdateHours int `json:"subUpdateHours"` // автообновление подписок каждые N часов (0 = выкл)
+
+	// AllowQUIC: разрешить QUIC/HTTP-3 в TUN. По умолчанию (false) QUIC режется —
+	// иначе на TCP-нодах (vless-vision, xhttp) UDP:443 уходит в чёрную дыру и
+	// ломаются Google/YouTube/медиа. Инверсия сделана ради нулевого значения:
+	// старые settings.json без поля → false → QUIC режется (безопасный дефолт).
+	AllowQUIC bool `json:"allowQuic"`
+
+	// Свои правила маршрутизации (домены, по одному в списке) поверх пресетов.
+	DirectDomains []string `json:"directDomains"` // всегда напрямую
+	ProxyDomains  []string `json:"proxyDomains"`  // всегда через прокси
+	BlockDomains  []string `json:"blockDomains"`  // блокировать
 }
 
 // Defaults возвращает настройки по умолчанию.

@@ -2,7 +2,9 @@ package main
 
 import (
 	_ "embed"
+	"fmt"
 
+	toast "git.sr.ht/~jackmordaunt/go-toast/v2"
 	"github.com/energye/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -86,6 +88,43 @@ func updateTrayMenu(state string) {
 		trayConnect.Enable()
 		trayDisconnect.Disable()
 	}
+}
+
+// updateTraySpeed показывает текущую скорость в подсказке иконки трея.
+func updateTraySpeed(down, up int64) {
+	if !trayReady {
+		return
+	}
+	systray.SetTooltip(fmt.Sprintf("Proxy ↓ %s ↑ %s", fmtRate(down), fmtRate(up)))
+}
+
+// trayNotify показывает всплывающее уведомление Windows (best-effort).
+func trayNotify(title, body string) {
+	go func() {
+		n := toast.Notification{
+			AppID:    "Proxy",
+			Title:    title,
+			Body:     body,
+			Duration: toast.Short,
+		}
+		_ = n.Push() // не критично, если система не показала
+	}()
+}
+
+// fmtRate форматирует скорость (байт/с) в человекочитаемый вид.
+func fmtRate(n int64) string {
+	const u = 1024
+	if n < u {
+		return fmt.Sprintf("%d B/s", n)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	v := float64(n)
+	i := -1
+	for v >= u && i < len(units)-1 {
+		v /= u
+		i++
+	}
+	return fmt.Sprintf("%.1f %s/s", v, units[i])
 }
 
 // stopTray завершает цикл трея при выходе приложения.

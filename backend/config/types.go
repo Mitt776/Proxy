@@ -25,7 +25,13 @@ type Options struct {
 
 	RoutingMode string // "global" (всё через прокси) | "ru-direct" (РФ напрямую)
 	BlockAds    bool   // блокировать рекламные домены (geosite-ads)
+	BlockQUIC   bool   // резать QUIC/HTTP-3 в TUN (fallback на TCP; чинит Google/YouTube)
 	RuleSetDir  string // каталог с .srs (обычно каталог ассетов)
+
+	// Свои правила маршрутизации (домены) поверх пресетов — высший приоритет.
+	DirectDomains []string // всегда напрямую
+	ProxyDomains  []string // всегда через прокси
+	BlockDomains  []string // блокировать
 
 	GeoIPPath   string // путь к geoip.db (для будущих правил)
 	GeoSitePath string // путь к geosite.db

@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,14 +108,18 @@ func (s *Store) Get(id string) *Profile {
 }
 
 // AddManual создаёт ручной профиль из ссылок/JSON и сразу считает ноды.
+// Если имя не задано — формируем его автоматически из тегов нод.
 func (s *Store) AddManual(name, raw string) (*Profile, error) {
 	nodes, err := config.DecodeSubscription([]byte(raw))
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(name) == "" {
+		name = deriveManualName(nodes)
+	}
 	p := &Profile{
 		ID:        randomID(),
-		Name:      fallback(name, "Профиль"),
+		Name:      name,
 		Kind:      "manual",
 		Raw:       raw,
 		NodeCount: len(nodes),
@@ -132,9 +138,12 @@ func (s *Store) AddSubscription(ctx context.Context, name, subURL string) (*Prof
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(name) == "" {
+		name = deriveSubName(subURL)
+	}
 	p := &Profile{
 		ID:        randomID(),
-		Name:      fallback(name, "Подписка"),
+		Name:      name,
 		Kind:      "subscription",
 		SubURL:    subURL,
 		Raw:       string(body),
@@ -142,6 +151,30 @@ func (s *Store) AddSubscription(ctx context.Context, name, subURL string) (*Prof
 		UpdatedAt: time.Now(),
 	}
 	return s.add(p)
+}
+
+// deriveManualName формирует имя ручного профиля из тегов нод:
+// «<тег первой ноды>» и «+N», если нод несколько.
+func deriveManualName(nodes []config.Node) string {
+	if len(nodes) == 0 {
+		return "Профиль"
+	}
+	base := strings.TrimSpace(nodes[0].Tag)
+	if base == "" {
+		base = "Профиль"
+	}
+	if len(nodes) > 1 {
+		base = fmt.Sprintf("%s +%d", base, len(nodes)-1)
+	}
+	return base
+}
+
+// deriveSubName берёт имя подписки из хоста её URL.
+func deriveSubName(subURL string) string {
+	if u, err := url.Parse(subURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return "Подписка"
 }
 
 // Refresh перезагружает подписку с сервера.
@@ -242,11 +275,4 @@ func randomID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-func fallback(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }

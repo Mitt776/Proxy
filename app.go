@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"Proxy/backend/settings"
 	"Proxy/backend/system"
 
+	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -45,6 +48,9 @@ type App struct {
 	blockAds    bool
 
 	trayQuit bool // пользователь выбрал «Выход» в трее — разрешаем закрытие окна
+
+	wasRunning   bool // для уведомлений: было ли соединение активно
+	userStopping bool // пользователь сам нажал «Отключить» (не считаем обрывом)
 
 	clashSecret string
 	clashPort   int
@@ -100,9 +106,21 @@ func (a *App) startup(ctx context.Context) {
 		if state == core.StateStopped || state == core.StateError {
 			_ = a.sysProxy.Clear()
 			a.stopStatsPoller()
+			// Уведомление об обрыве только если соединение было активно и его
+			// разорвал не сам пользователь.
+			if a.wasRunning && !a.userStopping {
+				trayNotify("Соединение разорвано", "Прокси отключился — трафик идёт напрямую")
+			}
+			a.wasRunning = false
+			a.userStopping = false
+			updateTraySpeed(0, 0)
 		}
 		if state == core.StateRunning {
 			a.startStatsPoller()
+			if !a.wasRunning {
+				trayNotify("Подключено", "Прокси активен")
+			}
+			a.wasRunning = true
 		}
 		updateTrayMenu(string(state))
 		runtime.EventsEmit(a.ctx, "core:state", map[string]string{
@@ -125,6 +143,9 @@ func (a *App) startup(ctx context.Context) {
 
 	// Иконка в трее (собственный цикл сообщений в отдельной горутине).
 	go a.runTray()
+
+	// Фоновое автообновление подписок по расписанию.
+	a.startSubScheduler()
 
 	// Перезапущены с повышением прав ради TUN — сразу поднимаем активный профиль.
 	if hasFlag(tunAutostartFlag) {
@@ -162,6 +183,14 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 		return true // отменяем закрытие — остаёмся в трее
 	}
 	return false
+}
+
+// onSecondInstance вызывается Wails, когда пользователь запускает ещё одну копию
+// приложения. Вторую копию не плодим (её процесс завершится сам) — вместо этого
+// разворачиваем и поднимаем уже работающее окно. Это чинит «кучу копий в трее».
+func (a *App) onSecondInstance(_ options.SecondInstanceData) {
+	runtime.WindowUnminimise(a.ctx)
+	runtime.WindowShow(a.ctx)
 }
 
 // --- Информация об окружении ---
@@ -261,6 +290,52 @@ func (a *App) ListProfileNodes(id string) ([]NodeInfo, error) {
 	return nodeInfos(nodes), nil
 }
 
+// ProfileConfigJSON возвращает готовый config.json sing-box для профиля
+// (в mixed-режиме, с текущими настройками маршрутизации) — для копирования/шаринга.
+func (a *App) ProfileConfigJSON(id string) (string, error) {
+	if a.store == nil {
+		return "", fmt.Errorf("хранилище не готово")
+	}
+	nodes, err := a.store.ResolveNodes(id)
+	if err != nil {
+		return "", err
+	}
+	var cr settings.Settings
+	if a.settings != nil {
+		cr = a.settings.Get()
+	}
+	cfg, err := config.Generate(config.Options{
+		MixedPort:     a.mixedPort,
+		ClashAPIPort:  a.clashPort,
+		ClashSecret:   a.clashSecret,
+		LogLevel:      "info",
+		Nodes:         nodes,
+		RoutingMode:   a.routingMode,
+		BlockAds:      a.blockAds,
+		RuleSetDir:    a.paths.AssetsDir,
+		DirectDomains: cr.DirectDomains,
+		ProxyDomains:  cr.ProxyDomains,
+		BlockDomains:  cr.BlockDomains,
+		CacheDBPath:   "cache.db",
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(cfg), nil
+}
+
+// ProfileRaw возвращает исходный ввод профиля (ссылки/JSON или тело подписки).
+func (a *App) ProfileRaw(id string) (string, error) {
+	if a.store == nil {
+		return "", fmt.Errorf("хранилище не готово")
+	}
+	p := a.store.Get(id)
+	if p == nil {
+		return "", fmt.Errorf("профиль не найден")
+	}
+	return p.Raw, nil
+}
+
 // --- Подключение ---
 
 // Connect запускает ядро на нодах активного профиля.
@@ -317,19 +392,27 @@ func (a *App) ConnectRaw(raw string, enableTUN bool) error {
 }
 
 func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
+	var cr settings.Settings
+	if a.settings != nil {
+		cr = a.settings.Get()
+	}
 	cfg, err := config.Generate(config.Options{
-		MixedPort:    a.mixedPort,
-		ClashAPIPort: a.clashPort,
-		ClashSecret:  a.clashSecret,
-		LogLevel:     "info",
-		EnableTUN:    enableTUN,
-		Nodes:        nodes,
-		RoutingMode:  a.routingMode,
-		BlockAds:     a.blockAds,
-		RuleSetDir:   a.paths.AssetsDir,
-		GeoIPPath:    a.paths.GeoIP,
-		GeoSitePath:  a.paths.GeoSite,
-		CacheDBPath:  "cache.db",
+		MixedPort:     a.mixedPort,
+		ClashAPIPort:  a.clashPort,
+		ClashSecret:   a.clashSecret,
+		LogLevel:      "info",
+		EnableTUN:     enableTUN,
+		Nodes:         nodes,
+		RoutingMode:   a.routingMode,
+		BlockAds:      a.blockAds,
+		BlockQUIC:     !cr.AllowQUIC,
+		RuleSetDir:    a.paths.AssetsDir,
+		DirectDomains: cr.DirectDomains,
+		ProxyDomains:  cr.ProxyDomains,
+		BlockDomains:  cr.BlockDomains,
+		GeoIPPath:     a.paths.GeoIP,
+		GeoSitePath:   a.paths.GeoSite,
+		CacheDBPath:   "cache.db",
 	})
 	if err != nil {
 		return err
@@ -349,6 +432,7 @@ func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
 
 // Disconnect снимает системный прокси и останавливает ядро.
 func (a *App) Disconnect() error {
+	a.userStopping = true // ручная остановка — не считаем обрывом
 	_ = a.sysProxy.Clear()
 	if a.manager == nil {
 		return nil
@@ -506,6 +590,14 @@ func (a *App) ResetCorePath() error {
 	return err
 }
 
+// SetBlockQUIC включает/выключает резку QUIC в TUN (применяется при подключении).
+func (a *App) SetBlockQUIC(block bool) error {
+	if a.settings == nil {
+		return nil
+	}
+	return a.settings.Update(func(s *settings.Settings) { s.AllowQUIC = !block })
+}
+
 // SetMinimizeToTray включает/выключает сворачивание в трей при закрытии окна.
 func (a *App) SetMinimizeToTray(enable bool) error {
 	if a.settings == nil {
@@ -528,6 +620,118 @@ func (a *App) SetAutostart(enable bool) error {
 		_ = a.settings.Update(func(s *settings.Settings) { s.Autostart = enable })
 	}
 	return nil
+}
+
+// --- Внешний IP и гео (через прокси) ---
+
+// IPInfo — внешний IP и его гео, полученные через прокси.
+type IPInfo struct {
+	IP          string `json:"ip"`
+	Country     string `json:"country"`
+	CountryCode string `json:"countryCode"`
+	City        string `json:"city"`
+}
+
+// ExternalIP запрашивает внешний IP и страну ЧЕРЕЗ локальный mixed-прокси —
+// то есть показывает, откуда «видит» пользователя интернет после подключения.
+func (a *App) ExternalIP() (IPInfo, error) {
+	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", a.mixedPort))
+	hc := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+	// ip-api.com — бесплатно, без ключа, по HTTP (проходит через mixed-прокси).
+	resp, err := hc.Get("http://ip-api.com/json/?fields=status,message,country,countryCode,city,query")
+	if err != nil {
+		return IPInfo{}, err
+	}
+	defer resp.Body.Close()
+
+	var r struct {
+		Status, Message, Country, CountryCode, City, Query string
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return IPInfo{}, err
+	}
+	if r.Status != "success" {
+		return IPInfo{}, fmt.Errorf("гео-сервис: %s", r.Message)
+	}
+	return IPInfo{IP: r.Query, Country: r.Country, CountryCode: r.CountryCode, City: r.City}, nil
+}
+
+// --- Автообновление подписок ---
+
+// SetSubUpdateHours задаёт интервал автообновления подписок (0 — выключить).
+func (a *App) SetSubUpdateHours(hours int) error {
+	if a.settings == nil {
+		return nil
+	}
+	if hours < 0 {
+		hours = 0
+	}
+	return a.settings.Update(func(s *settings.Settings) { s.SubUpdateHours = hours })
+}
+
+// startSubScheduler раз в 30 минут проверяет подписки и обновляет те, что старше
+// заданного интервала. Так смена интервала не требует перезапуска планировщика.
+func (a *App) startSubScheduler() {
+	// Первую проверку делаем вскоре после старта.
+	go func() {
+		time.Sleep(10 * time.Second)
+		a.autoRefreshSubs()
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			a.autoRefreshSubs()
+		}
+	}()
+}
+
+func (a *App) autoRefreshSubs() {
+	if a.settings == nil || a.store == nil {
+		return
+	}
+	hours := a.settings.Get().SubUpdateHours
+	if hours <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+	changed := false
+	for _, p := range a.store.List() {
+		if p.Kind == "subscription" && p.SubURL != "" && p.UpdatedAt.Before(cutoff) {
+			if _, err := a.store.Refresh(a.ctx, p.ID); err == nil {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		runtime.EventsEmit(a.ctx, "profiles:changed", nil)
+	}
+}
+
+// --- Свои правила маршрутизации ---
+
+// SetCustomRules сохраняет пользовательские домены (применяются при подключении).
+func (a *App) SetCustomRules(direct, proxy, block []string) error {
+	if a.settings == nil {
+		return nil
+	}
+	return a.settings.Update(func(s *settings.Settings) {
+		s.DirectDomains = cleanDomains(direct)
+		s.ProxyDomains = cleanDomains(proxy)
+		s.BlockDomains = cleanDomains(block)
+	})
+}
+
+func cleanDomains(in []string) []string {
+	var out []string
+	for _, d := range in {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // --- Clash API: ноды, задержка, переключение, статистика ---
@@ -629,6 +833,7 @@ func (a *App) startStatsPoller() {
 				}
 				lastDown, lastUp = t.DownloadTotal, t.UploadTotal
 				first = false
+				updateTraySpeed(downSpeed, upSpeed)
 				runtime.EventsEmit(a.ctx, "core:stats", map[string]interface{}{
 					"downSpeed":   downSpeed,
 					"upSpeed":     upSpeed,
