@@ -3,9 +3,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strconv"
-	"strings"
+
+	"Proxy/backend/rules"
 )
 
 // Теги ключевых outbound-ов, на которые ссылаются route.final и Clash API.
@@ -14,6 +14,18 @@ const (
 	AutoTag   = "auto"   // urltest — автоподбор лучшей ноды по задержке
 	DirectTag = "direct" // прямое соединение
 )
+
+// Режимы Clash API. Пользователь переключает их на лету (PATCH /configs):
+// правила маршрутизации работают только в ModeRule, остальные два — аварийные
+// переключатели «всё через прокси» и «всё напрямую».
+const (
+	ModeRule   = "Rule"   // работают пользовательские правила
+	ModeGlobal = "Global" // весь трафик через прокси
+	ModeDirect = "Direct" // весь трафик напрямую (прокси остаётся поднятым)
+)
+
+// DefaultLogLevel — уровень журнала ядра, если пользователь не выбрал другой.
+const DefaultLogLevel = "info"
 
 // Defaults подставляет разумные значения в незаданные поля Options.
 func (o *Options) Defaults() {
@@ -24,7 +36,7 @@ func (o *Options) Defaults() {
 		o.ClashAPIPort = 9090
 	}
 	if o.LogLevel == "" {
-		o.LogLevel = "info"
+		o.LogLevel = DefaultLogLevel
 	}
 	if o.TUNStack == "" {
 		o.TUNStack = "gvisor"
@@ -40,7 +52,7 @@ func Generate(opts Options) ([]byte, error) {
 		return nil, err
 	}
 
-	outbounds, finalTag, err := buildOutbounds(nodeTags, nodeOutbounds)
+	outbounds, groupNames, err := buildOutbounds(nodeTags, nodeOutbounds, opts.Routing.Groups)
 	if err != nil {
 		return nil, err
 	}
@@ -50,10 +62,26 @@ func Generate(opts Options) ([]byte, error) {
 		return nil, err
 	}
 
-	hasProxy := finalTag == ProxyTag
-	routeRules, ruleSets, err := buildRoute(opts)
+	// Прокси есть, только если в профиле есть ноды. Без них весь трафик идёт
+	// напрямую — это позволяет проверить запуск ядра без реального сервера.
+	hasProxy := len(nodeTags) > 0
+	finalTag := DirectTag
+	if hasProxy && opts.Routing.Final != rules.ActionDirect {
+		finalTag = ProxyTag
+	}
+
+	routeRules, ruleSets, err := buildRoute(opts, nodeTags, groupNames)
 	if err != nil {
 		return nil, err
+	}
+
+	// Режим восстанавливаем из настроек: после перезапуска ядра пользователь
+	// должен остаться в том же режиме, что выбрал.
+	mode := opts.Mode
+	switch mode {
+	case ModeRule, ModeGlobal, ModeDirect:
+	default:
+		mode = ModeRule
 	}
 
 	cfg := singBoxConfig{
@@ -72,6 +100,7 @@ func Generate(opts Options) ([]byte, error) {
 			ClashAPI: clashAPIOptions{
 				ExternalController: "127.0.0.1:" + strconv.Itoa(opts.ClashAPIPort),
 				Secret:             opts.ClashSecret,
+				DefaultMode:        mode,
 			},
 			CacheFile: cacheFile{Enabled: true, Path: opts.CacheDBPath},
 		},
@@ -103,96 +132,6 @@ func buildDNS(hasProxy bool) dnsOptions {
 		Final:    dnsRemoteTag,
 		Strategy: "ipv4_only",
 	}
-}
-
-// Режимы маршрутизации.
-const (
-	RoutingGlobal   = "global"    // весь трафик через прокси
-	RoutingRUDirect = "ru-direct" // РФ-домены/IP и приватные сети — напрямую
-)
-
-// Теги/имена файлов локальных rule-set'ов (лежат в каталоге ассетов).
-const (
-	rsGeoIPRU    = "geoip-ru"
-	rsGeositeRU  = "geosite-ru"
-	rsGeositeAds = "geosite-ads"
-)
-
-// buildRoute собирает правила маршрутизации и список локальных rule-set'ов.
-// Базово: sniff (определение протокола) + hijack-dns (перехват DNS в TUN).
-// Приватные адреса (LAN/роутер) всегда идут напрямую. Опционально: блок рекламы
-// и сплит-туннель «РФ напрямую».
-func buildRoute(opts Options) (rules []json.RawMessage, sets []ruleSet, err error) {
-	if err = appendJSON(&rules,
-		map[string]interface{}{"action": "sniff"},
-		map[string]interface{}{"protocol": "dns", "action": "hijack-dns"},
-	); err != nil {
-		return nil, nil, err
-	}
-
-	// Режем QUIC в TUN: на TCP-нодах UDP:443 не проходит, и браузер зависает на
-	// HTTP-3 вместо fallback на TCP (ломаются Google/YouTube/медиа). reject
-	// заставляет клиента сразу перейти на HTTP/2 поверх TCP.
-	if opts.EnableTUN && opts.BlockQUIC {
-		if err = appendJSON(&rules, map[string]interface{}{
-			"protocol": "quic", "action": "reject",
-		}); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	add := func(tag, file string) {
-		sets = append(sets, ruleSet{
-			Type:   "local",
-			Tag:    tag,
-			Format: "binary",
-			Path:   filepath.Join(opts.RuleSetDir, file),
-		})
-	}
-
-	// Свои правила (высший приоритет): блок → напрямую → через прокси.
-	hasProxy := len(opts.Nodes) > 0
-	if err = appendDomainRule(&rules, opts.BlockDomains, "reject", ""); err != nil {
-		return nil, nil, err
-	}
-	if err = appendDomainRule(&rules, opts.DirectDomains, "", DirectTag); err != nil {
-		return nil, nil, err
-	}
-	if hasProxy { // proxy-outbound существует только когда есть ноды
-		if err = appendDomainRule(&rules, opts.ProxyDomains, "", ProxyTag); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	// Блокировка рекламных доменов.
-	if opts.BlockAds && opts.RuleSetDir != "" {
-		add(rsGeositeAds, rsGeositeAds+".srs")
-		if err = appendJSON(&rules, map[string]interface{}{
-			"rule_set": []string{rsGeositeAds}, "action": "reject",
-		}); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	// Приватные адреса — всегда напрямую (иначе теряется доступ к LAN/роутеру).
-	if err = appendJSON(&rules, map[string]interface{}{
-		"ip_is_private": true, "outbound": DirectTag,
-	}); err != nil {
-		return nil, nil, err
-	}
-
-	// Сплит-туннель: РФ-домены и IP идут напрямую, остальное — через прокси.
-	if opts.RoutingMode == RoutingRUDirect && opts.RuleSetDir != "" {
-		add(rsGeoIPRU, rsGeoIPRU+".srs")
-		add(rsGeositeRU, rsGeositeRU+".srs")
-		if err = appendJSON(&rules, map[string]interface{}{
-			"rule_set": []string{rsGeoIPRU, rsGeositeRU}, "outbound": DirectTag,
-		}); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	return rules, sets, nil
 }
 
 // buildNodes дедуплицирует теги нод и возвращает упорядоченные теги + тела outbound-ов
@@ -236,40 +175,71 @@ func setOutboundTag(raw json.RawMessage, tag string) (json.RawMessage, error) {
 	return json.Marshal(m)
 }
 
-// buildOutbounds формирует итоговый список outbound-ов и тег для route.final.
-// Если нод нет — трафик идёт напрямую (final = direct), что позволяет проверить
-// запуск ядра без реального сервера.
-func buildOutbounds(nodeTags []string, nodeOutbounds []json.RawMessage) ([]json.RawMessage, string, error) {
+// buildOutbounds формирует итоговый список outbound-ов и множество имён групп,
+// которые реально попали в конфиг (на пустые группы правилам ссылаться нельзя).
+// Если нод нет, остаётся один direct — это позволяет проверить запуск ядра без
+// реального сервера.
+func buildOutbounds(nodeTags []string, nodeOutbounds []json.RawMessage, groups []rules.Group) ([]json.RawMessage, map[string]bool, error) {
 	var out []json.RawMessage
-	final := DirectTag
+	names := map[string]bool{}
 
 	if len(nodeTags) > 0 {
-		final = ProxyTag
+		// Группы идут в основной селектор перед отдельными нодами: так в UI
+		// (и в Clash API) сначала видны осмысленные наборы, потом сырые ноды.
+		var groupOutbounds []json.RawMessage
+		var groupTags []string // порядок как в настройках пользователя
+		for _, g := range groups {
+			members := g.MatchNodes(nodeTags)
+			if len(members) == 0 {
+				continue // группа без нод сломала бы конфиг
+			}
+			names[g.Name] = true
+			groupTags = append(groupTags, g.Name)
+			var err error
+			if g.Type == rules.GroupURLTest {
+				err = appendJSON(&groupOutbounds, urltestOutbound{
+					Type: "urltest", Tag: g.Name, Outbounds: members,
+					URL: latencyTestURL, Interval: "3m",
+				})
+			} else {
+				err = appendJSON(&groupOutbounds, selectorOutbound{
+					Type: "selector", Tag: g.Name, Outbounds: members, Default: members[0],
+				})
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 
+		members := append([]string{AutoTag}, groupTags...)
 		selector := selectorOutbound{
 			Type:      "selector",
 			Tag:       ProxyTag,
-			Outbounds: append([]string{AutoTag}, nodeTags...),
+			Outbounds: append(members, nodeTags...),
 			Default:   AutoTag,
 		}
 		urltest := urltestOutbound{
 			Type:      "urltest",
 			Tag:       AutoTag,
 			Outbounds: nodeTags,
-			URL:       "https://www.gstatic.com/generate_204",
+			URL:       latencyTestURL,
 			Interval:  "3m",
 		}
 		if err := appendJSON(&out, selector, urltest); err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
+		out = append(out, groupOutbounds...)
 		out = append(out, nodeOutbounds...)
 	}
 
 	if err := appendJSON(&out, simpleOutbound{Type: "direct", Tag: DirectTag}); err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
-	return out, final, nil
+	return out, names, nil
 }
+
+// latencyTestURL — эндпоинт для urltest: 204 без тела, отвечает быстро.
+const latencyTestURL = "https://www.gstatic.com/generate_204"
 
 // buildInbounds собирает mixed inbound и (опционально) tun inbound.
 func buildInbounds(opts Options) ([]json.RawMessage, error) {
@@ -303,29 +273,6 @@ func buildInbounds(opts Options) ([]json.RawMessage, error) {
 		}
 	}
 	return in, nil
-}
-
-// appendDomainRule добавляет правило по списку доменов (domain_suffix — совпадает
-// и с поддоменами). action != "" → это действие (напр. reject); иначе — outbound.
-// Пустой/из пробелов список пропускается.
-func appendDomainRule(dst *[]json.RawMessage, domains []string, action, outbound string) error {
-	var clean []string
-	for _, d := range domains {
-		d = strings.ToLower(strings.TrimSpace(d))
-		if d != "" {
-			clean = append(clean, d)
-		}
-	}
-	if len(clean) == 0 {
-		return nil
-	}
-	rule := map[string]interface{}{"domain_suffix": clean}
-	if action != "" {
-		rule["action"] = action
-	} else {
-		rule["outbound"] = outbound
-	}
-	return appendJSON(dst, rule)
 }
 
 // appendJSON маршалит значения и добавляет их в срез RawMessage.

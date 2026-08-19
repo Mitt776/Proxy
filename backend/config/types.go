@@ -1,7 +1,11 @@
 // Package config собирает конфигурацию sing-box из профилей и опций приложения.
 package config
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"Proxy/backend/rules"
+)
 
 // Node — одна распарсенная нода (outbound sing-box) с её тегом.
 // Само тело хранится как RawMessage, потому что у разных протоколов
@@ -23,15 +27,17 @@ type Options struct {
 
 	Nodes []Node // распарсенные ноды профиля
 
-	RoutingMode string // "global" (всё через прокси) | "ru-direct" (РФ напрямую)
-	BlockAds    bool   // блокировать рекламные домены (geosite-ads)
-	BlockQUIC   bool   // резать QUIC/HTTP-3 в TUN (fallback на TCP; чинит Google/YouTube)
-	RuleSetDir  string // каталог с .srs (обычно каталог ассетов)
+	// Routing — упорядоченный список правил маршрутизации и групп нод
+	// (data\routing.json). Заменил прежние «режимы»: любой пресет теперь просто
+	// набор правил, которые пользователь может переставить или выключить.
+	Routing rules.Config
 
-	// Свои правила маршрутизации (домены) поверх пресетов — высший приоритет.
-	DirectDomains []string // всегда напрямую
-	ProxyDomains  []string // всегда через прокси
-	BlockDomains  []string // блокировать
+	// Mode — режим Clash API при старте (ModeRule|ModeGlobal|ModeDirect).
+	// Пустое значение = ModeRule.
+	Mode string
+
+	BlockQUIC  bool   // резать QUIC/HTTP-3 в TUN (fallback на TCP; чинит Google/YouTube)
+	RuleSetDir string // каталог с .srs (обычно каталог ассетов)
 
 	GeoIPPath   string // путь к geoip.db (для будущих правил)
 	GeoSitePath string // путь к geosite.db
@@ -57,10 +63,10 @@ type dnsOptions struct {
 }
 
 type dnsServer struct {
-	Tag     string `json:"tag"`
-	Type    string `json:"type"`             // https|udp|tls|...
-	Server  string `json:"server"`           // адрес DNS-сервера
-	Detour  string `json:"detour,omitempty"` // через какой outbound слать запросы
+	Tag    string `json:"tag"`
+	Type   string `json:"type"`             // https|udp|tls|...
+	Server string `json:"server"`           // адрес DNS-сервера
+	Detour string `json:"detour,omitempty"` // через какой outbound слать запросы
 }
 
 type logOptions struct {
@@ -77,12 +83,17 @@ type routeOptions struct {
 	DefaultDomainResolver *domainResolver   `json:"default_domain_resolver,omitempty"`
 }
 
-// ruleSet — локальный бинарный rule-set (.srs) для гео-маршрутизации.
+// ruleSet — набор правил для гео-маршрутизации: либо локальный .srs из каталога
+// ассетов, либо удалённый (ядро качает сам и кэширует в cache.db).
 type ruleSet struct {
-	Type   string `json:"type"`   // local
+	Type   string `json:"type"`   // local | remote
 	Tag    string `json:"tag"`    //
-	Format string `json:"format"` // binary
-	Path   string `json:"path"`   // абсолютный путь к .srs
+	Format string `json:"format"` // binary | source
+	Path   string `json:"path,omitempty"`
+	// Поля удалённого набора.
+	URL            string `json:"url,omitempty"`
+	DownloadDetour string `json:"download_detour,omitempty"`
+	UpdateInterval string `json:"update_interval,omitempty"`
 }
 
 // domainResolver указывает, какой DNS резолвит домены серверов outbound
@@ -99,6 +110,10 @@ type experimental struct {
 type clashAPIOptions struct {
 	ExternalController string `json:"external_controller"`
 	Secret             string `json:"secret,omitempty"`
+	// DefaultMode — режим при старте ядра. Режимы переключаются на лету
+	// (PATCH /configs) и ловятся правилами через clash_mode, поэтому смена
+	// «всё через прокси / всё напрямую» не требует перезапуска.
+	DefaultMode string `json:"default_mode,omitempty"`
 }
 
 type cacheFile struct {

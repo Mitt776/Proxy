@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"Proxy/backend/config"
@@ -41,6 +42,11 @@ type Store struct {
 }
 
 // Load читает профили из файла (или создаёт пустое хранилище).
+//
+// Хранилище возвращается всегда, даже при ошибке: приложение без профилей
+// работает (их можно добавить заново), а вот с nil-хранилищем половина API
+// падает на разыменовании. Ошибка здесь — повод сообщить пользователю, а не
+// повод остаться без Store.
 func Load(dataDir string) (*Store, error) {
 	s := &Store{path: filepath.Join(dataDir, "profiles.json")}
 	b, err := os.ReadFile(s.path)
@@ -48,10 +54,17 @@ func Load(dataDir string) (*Store, error) {
 		if os.IsNotExist(err) {
 			return s, nil
 		}
-		return nil, err
+		return s, err
 	}
 	if err := json.Unmarshal(b, &s.data); err != nil {
-		return nil, fmt.Errorf("profiles.json повреждён: %w", err)
+		s.data = storeData{}
+		// Битый файл отводим в сторону: перезаписать его молча значит потерять
+		// профили пользователя, оставить как есть — падать при каждом запуске.
+		bad := s.path + ".bad"
+		if rerr := os.Rename(s.path, bad); rerr != nil {
+			return s, fmt.Errorf("profiles.json повреждён: %w", err)
+		}
+		return s, fmt.Errorf("profiles.json повреждён, сохранён как %s: %w", filepath.Base(bad), err)
 	}
 	return s, nil
 }
@@ -68,12 +81,18 @@ func (s *Store) save() error {
 	return os.Rename(tmp, s.path) // атомарная замена
 }
 
-// List возвращает копию списка профилей.
+// List возвращает копии профилей. Копируем сами структуры, а не только слайс:
+// иначе вызывающий читает те же объекты, которые Refresh правит под мьютексом,
+// — гонка данных на ровном месте (трей и планировщик подписок ходят сюда из
+// своих горутин).
 func (s *Store) List() []*Profile {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*Profile, len(s.data.Profiles))
-	copy(out, s.data.Profiles)
+	out := make([]*Profile, 0, len(s.data.Profiles))
+	for _, p := range s.data.Profiles {
+		cp := *p
+		out = append(out, &cp)
+	}
 	return out
 }
 
@@ -271,8 +290,15 @@ func (s *Store) find(id string) *Profile {
 	return nil
 }
 
+// idFallback нумерует идентификаторы, если системный источник случайности
+// отказал: одинаковый ID у двух профилей означает, что удаление и выбор
+// активного попадут не в тот профиль.
+var idFallback atomic.Uint64
+
 func randomID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("id%x%x", time.Now().UnixNano(), idFallback.Add(1))
+	}
 	return hex.EncodeToString(b)
 }

@@ -1,0 +1,116 @@
+/* Общие элементы интерфейса. Живут глобально, потому что нужны сразу
+   нескольким компонентам, а scoped-стили Svelte не наследуются. */
+
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --line: #30363d;
+  --line-2: #444c56;
+  --text: #e6edf3;
+  --text-2: #adbac7;
+  --muted: #7d8590;
+  --muted-2: #545d68;
+  --accent: #388bfd;
+  --accent-bg: #0d1a2b;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel-h {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 9px 22px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+  font-family: inherit;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.go { background: #238636; }
+.btn.go:hover:not(:disabled) { background: #2ea043; }
+.btn.stop { background: #b62324; }
+.btn.stop:hover:not(:disabled) { background: #d13438; }
+.btn.add-btn { background: #1f6feb; }
+.btn.add-btn:hover:not(:disabled) { background: var(--accent); }
+
+.mini {
+  background: #21262d;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+.mini:hover:not(:disabled) { background: var(--line); }
+.mini.danger:hover:not(:disabled) { background: #b62324; color: #fff; }
+.mini:disabled { opacity: 0.4; cursor: default; }
+.mini.wide {
+  width: auto;
+  padding: 0 10px;
+  height: 24px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fld {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+textarea.fld {
+  resize: vertical;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+.fld:focus { outline: none; border-color: var(--accent); }
+select.fld { cursor: pointer; padding: 5px 8px; }
+select.fld:disabled { opacity: 0.6; cursor: default; }
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.hint { font-size: 11px; color: var(--muted-2); line-height: 1.4; }
+.empty { color: var(--muted-2); font-size: 13px; text-align: center; padding: 16px 0; }
+
+.error {
+  color: #ff7b72;
+  font-size: 12.5px;
+  background: #21100f;
+  border: 1px solid #5c1d1a;
+  border-radius: 6px;
+  padding: 7px 10px;
+  white-space: pre-wrap;
+}

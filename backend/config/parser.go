@@ -250,11 +250,35 @@ func buildXHTTP(q url.Values) map[string]interface{} {
 		var m map[string]interface{}
 		if err := json.Unmarshal([]byte(extra), &m); err == nil {
 			for camel, v := range m {
-				set(camel, fmt.Sprint(v))
+				set(camel, scalarString(v))
 			}
 		}
 	}
 	return tr
+}
+
+// scalarString переводит значение из JSON-параметра extra в строку так, как оно
+// было записано в ссылке. Через fmt.Sprint нельзя: json.Unmarshal кладёт любое
+// число в float64, и sc_max_each_post_bytes=1000000 превратилось бы в "1e+06" —
+// такое значение ядро не принимает.
+func scalarString(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case json.Number:
+		return t.String()
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // isXHTTP сообщает, относится ли значение type/net к транспорту XHTTP.

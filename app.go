@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"Proxy/backend/config"
 	"Proxy/backend/core"
 	"Proxy/backend/profile"
+	"Proxy/backend/rules"
 	"Proxy/backend/settings"
 	"Proxy/backend/system"
 
@@ -43,6 +45,7 @@ type App struct {
 	manager  *core.Manager
 	store    *profile.Store
 	settings *settings.Store
+	rules    *rules.Store
 	sysProxy *system.SystemProxy
 
 	clash *core.ClashClient
@@ -50,18 +53,17 @@ type App struct {
 	statsMu     sync.Mutex
 	statsCancel context.CancelFunc
 
-	routingMode string // config.RoutingGlobal | config.RoutingRUDirect
-	blockAds    bool
-
-	trayQuit bool // пользователь выбрал «Выход» в трее — разрешаем закрытие окна
+	// Флаги ниже пишутся и читаются из разных потоков (цикл сообщений трея,
+	// горутина наблюдения за ядром, поток окна Wails), поэтому атомарные.
+	trayQuit atomic.Bool // пользователь выбрал «Выход» в трее — разрешаем закрытие окна
 	// relaunching — идёт передача управления процессу, перезапущенному с UAC.
 	// Как и trayQuit, отключает перехват закрытия в beforeClose: иначе окно лишь
 	// спрячется в трей, старый процесс останется жить, и его WebView2 не пустит
 	// элевированный процесс к общей user data folder — окно будет пустым.
-	relaunching bool
+	relaunching atomic.Bool
 
-	wasRunning   bool // для уведомлений: было ли соединение активно
-	userStopping bool // пользователь сам нажал «Отключить» (не считаем обрывом)
+	wasRunning   atomic.Bool // для уведомлений: было ли соединение активно
+	userStopping atomic.Bool // пользователь сам нажал «Отключить» (не считаем обрывом)
 
 	clashSecret string
 	clashPort   int
@@ -71,10 +73,9 @@ type App struct {
 // NewApp создаёт приложение.
 func NewApp() *App {
 	return &App{
-		clashPort:   9090,
-		mixedPort:   2080,
-		routingMode: config.RoutingGlobal,
-		sysProxy:    system.NewSystemProxy(),
+		clashPort: 9090,
+		mixedPort: 2080,
+		sysProxy:  system.NewSystemProxy(),
 	}
 }
 
@@ -92,22 +93,49 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.paths = paths
 
+	// Прошлый запуск мог умереть, не сняв системный прокси (краш, taskkill,
+	// выключение питания). В реестре остался наш адрес, а слушать его уже некому
+	// — для пользователя это выглядит как «пропал интернет». Снимаем.
+	if cleared, cerr := a.sysProxy.ClearStale(a.proxyAddr()); cerr != nil {
+		runtime.LogErrorf(ctx, "clear stale proxy: %v", cerr)
+	} else if cleared {
+		runtime.LogInfo(ctx, "снят системный прокси, оставшийся от прошлого запуска")
+	}
+
+	// Хранилища возвращаются рабочими даже при ошибке чтения: без профилей или
+	// правил приложение живёт, а вот с nil-хранилищем половина API падает.
+	// Повреждённый файл при этом отложен в *.bad — сообщаем об этом пользователю.
 	store, err := profile.Load(paths.DataDir)
 	if err != nil {
 		runtime.LogErrorf(ctx, "load profiles: %v", err)
-		store, _ = profile.Load(paths.DataDir) // пустое хранилище как фолбэк
+		trayNotify("Профили не загружены", err.Error())
 	}
 	a.store = store
 
 	set, err := settings.Load(paths.DataDir)
 	if err != nil {
 		runtime.LogErrorf(ctx, "load settings: %v", err)
-		set, _ = settings.Load(paths.DataDir)
+		trayNotify("Настройки не загружены", err.Error())
 	}
 	a.settings = set
 	cur := set.Get()
-	a.routingMode = cur.RoutingMode
-	a.blockAds = cur.BlockAds
+
+	// Правила маршрутизации. Если routing.json ещё нет (обновление с версии до
+	// 1.2.0 или чистая установка) — собираем список из старых настроек, чтобы
+	// поведение не поменялось под пользователем.
+	rs, err := rules.Load(paths.DataDir)
+	if err != nil {
+		runtime.LogErrorf(ctx, "load routing: %v", err)
+		trayNotify("Правила не загружены", err.Error())
+	}
+	if !rs.Exists() {
+		migrated := rules.Migrate(cur.RoutingMode, cur.BlockAds,
+			cur.DirectDomains, cur.ProxyDomains, cur.BlockDomains)
+		if err := rs.Init(migrated); err != nil {
+			runtime.LogErrorf(ctx, "init routing: %v", err)
+		}
+	}
+	a.rules = rs
 
 	m := core.NewManager(paths)
 	m.OnLog = func(line string) { runtime.EventsEmit(a.ctx, "core:log", line) }
@@ -119,19 +147,18 @@ func (a *App) startup(ctx context.Context) {
 			a.stopStatsPoller()
 			// Уведомление об обрыве только если соединение было активно и его
 			// разорвал не сам пользователь.
-			if a.wasRunning && !a.userStopping {
+			if a.wasRunning.Load() && !a.userStopping.Load() {
 				trayNotify("Соединение разорвано", "Прокси отключился — трафик идёт напрямую")
 			}
-			a.wasRunning = false
-			a.userStopping = false
+			a.wasRunning.Store(false)
+			a.userStopping.Store(false)
 			updateTraySpeed(0, 0)
 		}
 		if state == core.StateRunning {
 			a.startStatsPoller()
-			if !a.wasRunning {
+			if !a.wasRunning.Swap(true) {
 				trayNotify("Подключено", "Прокси активен")
 			}
-			a.wasRunning = true
 		}
 		updateTrayMenu(string(state))
 		runtime.EventsEmit(a.ctx, "core:state", map[string]string{
@@ -181,7 +208,7 @@ func (a *App) shutdown(ctx context.Context) {
 // beforeClose перехватывает закрытие окна: по умолчанию прячем приложение в трей
 // (ядро продолжает работать). Реальное завершение — только через «Выход» в трее.
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
-	if a.trayQuit || a.relaunching {
+	if a.trayQuit.Load() || a.relaunching.Load() {
 		return false // явный выход из трея либо передача управления elevated-процессу
 	}
 	minimize := true
@@ -260,7 +287,9 @@ func (a *App) AddManualProfile(name, raw string) (*profile.Profile, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("хранилище не готово")
 	}
-	return a.store.AddManual(name, raw)
+	p, err := a.store.AddManual(name, raw)
+	a.rebuildTrayProfiles()
+	return p, err
 }
 
 // AddSubscriptionProfile создаёт профиль-подписку по URL.
@@ -268,22 +297,37 @@ func (a *App) AddSubscriptionProfile(name, url string) (*profile.Profile, error)
 	if a.store == nil {
 		return nil, fmt.Errorf("хранилище не готово")
 	}
-	return a.store.AddSubscription(a.ctx, name, url)
+	p, err := a.store.AddSubscription(a.ctx, name, url)
+	a.rebuildTrayProfiles()
+	return p, err
 }
 
 // RefreshProfile перезагружает подписку.
 func (a *App) RefreshProfile(id string) (*profile.Profile, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("хранилище не готово")
+	}
 	return a.store.Refresh(a.ctx, id)
 }
 
 // DeleteProfile удаляет профиль.
 func (a *App) DeleteProfile(id string) error {
-	return a.store.Delete(id)
+	if a.store == nil {
+		return fmt.Errorf("хранилище не готово")
+	}
+	err := a.store.Delete(id)
+	a.rebuildTrayProfiles()
+	return err
 }
 
 // SetActiveProfile помечает профиль активным.
 func (a *App) SetActiveProfile(id string) error {
-	return a.store.SetActive(id)
+	if a.store == nil {
+		return fmt.Errorf("хранилище не готово")
+	}
+	err := a.store.SetActive(id)
+	a.rebuildTrayProfiles()
+	return err
 }
 
 // NodeInfo — краткое описание ноды для UI.
@@ -294,6 +338,9 @@ type NodeInfo struct {
 
 // ListProfileNodes возвращает ноды профиля (для выбора в UI).
 func (a *App) ListProfileNodes(id string) ([]NodeInfo, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("хранилище не готово")
+	}
 	nodes, err := a.store.ResolveNodes(id)
 	if err != nil {
 		return nil, err
@@ -311,24 +358,7 @@ func (a *App) ProfileConfigJSON(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var cr settings.Settings
-	if a.settings != nil {
-		cr = a.settings.Get()
-	}
-	cfg, err := config.Generate(config.Options{
-		MixedPort:     a.mixedPort,
-		ClashAPIPort:  a.clashPort,
-		ClashSecret:   a.clashSecret,
-		LogLevel:      "info",
-		Nodes:         nodes,
-		RoutingMode:   a.routingMode,
-		BlockAds:      a.blockAds,
-		RuleSetDir:    a.paths.AssetsDir,
-		DirectDomains: cr.DirectDomains,
-		ProxyDomains:  cr.ProxyDomains,
-		BlockDomains:  cr.BlockDomains,
-		CacheDBPath:   "cache.db",
-	})
+	cfg, err := config.Generate(a.configOptions(nodes, false))
 	if err != nil {
 		return "", err
 	}
@@ -356,11 +386,6 @@ func (a *App) Connect(enableTUN bool) error {
 		return fmt.Errorf("приложение не инициализировано")
 	}
 
-	// Запоминаем выбранный режим перехвата на будущие запуски.
-	if a.settings != nil {
-		_ = a.settings.Update(func(s *settings.Settings) { s.EnableTUN = enableTUN })
-	}
-
 	// TUN требует прав администратора для создания сетевого адаптера.
 	if enableTUN && !system.IsAdmin() {
 		// Свой PID — чтобы новый процесс дождался нашей смерти и только потом
@@ -372,9 +397,12 @@ func (a *App) Connect(enableTUN bool) error {
 			}
 			return fmt.Errorf("не удалось получить права администратора: %w", err)
 		}
+		// Режим запоминаем только теперь: откажи пользователь в UAC — и следующий
+		// запуск (автозапуск, кнопка в трее) снова полез бы за правами.
+		a.rememberTUN(enableTUN)
 		// Управление переходит к новому (elevated) процессу — закрываем текущий.
 		// Флаг обязателен: без него beforeClose спрячет окно в трей вместо выхода.
-		a.relaunching = true
+		a.relaunching.Store(true)
 		runtime.Quit(a.ctx)
 		return nil
 	}
@@ -387,50 +415,70 @@ func (a *App) Connect(enableTUN bool) error {
 	if err != nil {
 		return err
 	}
-	return a.startCore(nodes, enableTUN)
+	if err := a.startCore(nodes, enableTUN); err != nil {
+		return err
+	}
+	a.rememberTUN(enableTUN)
+	return nil
 }
 
-// ConnectRaw запускает ядро на нодах из произвольного ввода (ссылки/JSON/подписка).
-// Пустой ввод даёт прямое соединение — удобно для проверки ядра.
-func (a *App) ConnectRaw(raw string, enableTUN bool) error {
-	if a.manager == nil {
-		return fmt.Errorf("приложение не инициализировано")
+// rememberTUN запоминает выбранный режим перехвата на будущие запуски. Пишем
+// его только после того, как подключение действительно состоялось: сохранённый
+// «TUN» при неудачном старте заставлял бы автозапуск и трей каждый раз лезть за
+// правами администратора.
+func (a *App) rememberTUN(enableTUN bool) {
+	if a.settings == nil {
+		return
 	}
-	var nodes []config.Node
-	if strings.TrimSpace(raw) != "" {
-		var err error
-		nodes, err = config.DecodeSubscription([]byte(raw))
-		if err != nil {
-			return err
-		}
-	}
-	return a.startCore(nodes, enableTUN)
+	_ = a.settings.Update(func(s *settings.Settings) { s.EnableTUN = enableTUN })
 }
 
-func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
+// proxyAddr — адрес локального mixed-прокси, который мы прописываем в системные
+// настройки Windows. Один источник правды: по нему же на старте распознаётся
+// прокси, оставшийся от аварийно завершённого запуска.
+func (a *App) proxyAddr() string {
+	return fmt.Sprintf("127.0.0.1:%d", a.mixedPort)
+}
+
+// configOptions собирает параметры генерации конфига из текущего состояния
+// приложения: настройки, правила маршрутизации и пути к ассетам.
+func (a *App) configOptions(nodes []config.Node, enableTUN bool) config.Options {
 	var cr settings.Settings
 	if a.settings != nil {
 		cr = a.settings.Get()
 	}
-	cfg, err := config.Generate(config.Options{
-		MixedPort:     a.mixedPort,
-		ClashAPIPort:  a.clashPort,
-		ClashSecret:   a.clashSecret,
-		LogLevel:      "info",
-		EnableTUN:     enableTUN,
-		Nodes:         nodes,
-		RoutingMode:   a.routingMode,
-		BlockAds:      a.blockAds,
-		BlockQUIC:     !cr.AllowQUIC,
-		RuleSetDir:    a.paths.AssetsDir,
-		DirectDomains: cr.DirectDomains,
-		ProxyDomains:  cr.ProxyDomains,
-		BlockDomains:  cr.BlockDomains,
-		GeoIPPath:     a.paths.GeoIP,
-		GeoSitePath:   a.paths.GeoSite,
-		CacheDBPath:   "cache.db",
-	})
+	var routing rules.Config
+	if a.rules != nil {
+		routing = a.rules.Get()
+	}
+	opts := config.Options{
+		MixedPort:    a.mixedPort,
+		ClashAPIPort: a.clashPort,
+		ClashSecret:  a.clashSecret,
+		LogLevel:     normalizeLogLevel(cr.LogLevel),
+		EnableTUN:    enableTUN,
+		Nodes:        nodes,
+		Routing:      routing,
+		Mode:         cr.Mode,
+		BlockQUIC:    !cr.AllowQUIC,
+		CacheDBPath:  "cache.db",
+	}
+	if a.paths != nil {
+		opts.RuleSetDir = a.paths.AssetsDir
+		opts.GeoIPPath = a.paths.GeoIP
+		opts.GeoSitePath = a.paths.GeoSite
+	}
+	return opts
+}
+
+func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
+	cfg, err := config.Generate(a.configOptions(nodes, enableTUN))
 	if err != nil {
+		return err
+	}
+	// Проверяем конфиг ядром до запуска: иначе о неподдерживаемом поле мы узнаём
+	// по мгновенно умершему процессу и невнятной ошибке в логе.
+	if err := a.manager.Check(cfg); err != nil {
 		return err
 	}
 	if err := a.manager.Start(cfg); err != nil {
@@ -439,7 +487,7 @@ func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
 
 	// Без TUN трафик заворачивается через системный прокси на mixed-порт.
 	if !enableTUN {
-		if err := a.sysProxy.Set(fmt.Sprintf("127.0.0.1:%d", a.mixedPort)); err != nil {
+		if err := a.sysProxy.Set(a.proxyAddr()); err != nil {
 			runtime.LogErrorf(a.ctx, "set system proxy: %v", err)
 		}
 	}
@@ -448,7 +496,7 @@ func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
 
 // Disconnect снимает системный прокси и останавливает ядро.
 func (a *App) Disconnect() error {
-	a.userStopping = true // ручная остановка — не считаем обрывом
+	a.userStopping.Store(true) // ручная остановка — не считаем обрывом
 	_ = a.sysProxy.Clear()
 	if a.manager == nil {
 		return nil
@@ -486,36 +534,193 @@ func (a *App) GetLogs() []string {
 	return a.manager.Logs()
 }
 
-// --- Маршрутизация ---
-
-// RoutingSettings — текущий режим маршрутизации для UI.
-type RoutingSettings struct {
-	Mode     string `json:"mode"` // global | ru-direct
-	BlockAds bool   `json:"blockAds"`
+// ListProcesses возвращает запущенные процессы с иконками — для пикера при
+// создании правила «этот процесс мимо прокси».
+func (a *App) ListProcesses() ([]system.ProcessInfo, error) {
+	return system.ListProcesses()
 }
 
-// GetRouting возвращает текущие настройки маршрутизации.
-func (a *App) GetRouting() RoutingSettings {
-	return RoutingSettings{Mode: a.routingMode, BlockAds: a.blockAds}
-}
+// --- Режим маршрутизации ---
 
-// SetRouting меняет режим маршрутизации. Применяется при следующем подключении
-// (смена правил требует регенерации конфига и рестарта ядра).
-func (a *App) SetRouting(mode string, blockAds bool) error {
-	switch mode {
-	case config.RoutingGlobal, config.RoutingRUDirect:
-		a.routingMode = mode
-	default:
-		return fmt.Errorf("неизвестный режим маршрутизации: %q", mode)
+// GetMode возвращает текущий режим: Rule (работают правила), Global (всё через
+// прокси) или Direct (всё напрямую). У живого ядра спрашиваем сам ядро — режим
+// мог поменяться из другого клиента Clash API.
+func (a *App) GetMode() string {
+	if a.manager != nil && a.manager.State() == core.StateRunning && a.clash != nil {
+		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
+		defer cancel()
+		if mode, err := a.clash.Mode(ctx); err == nil && mode != "" {
+			return mode
+		}
 	}
-	a.blockAds = blockAds
 	if a.settings != nil {
-		return a.settings.Update(func(s *settings.Settings) {
-			s.RoutingMode = mode
-			s.BlockAds = blockAds
-		})
+		if m := a.settings.Get().Mode; m != "" {
+			return m
+		}
+	}
+	return config.ModeRule
+}
+
+// SetMode переключает режим. На работающем ядре это делается через Clash API
+// (PATCH /configs) — мгновенно и без разрыва соединений; перезапуск не нужен.
+func (a *App) SetMode(mode string) error {
+	switch mode {
+	case config.ModeRule, config.ModeGlobal, config.ModeDirect:
+	default:
+		return fmt.Errorf("неизвестный режим: %q", mode)
+	}
+	// Сначала живому ядру, потом на диск: откажи ядро — и сохранённый режим
+	// разошёлся бы с тем, по которому реально идёт трафик.
+	if a.manager != nil && a.manager.State() == core.StateRunning && a.clash != nil {
+		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+		defer cancel()
+		if err := a.clash.SetMode(ctx, mode); err != nil {
+			return err
+		}
+	}
+	if a.settings != nil {
+		if err := a.settings.Update(func(s *settings.Settings) { s.Mode = mode }); err != nil {
+			return err
+		}
+	}
+	runtime.EventsEmit(a.ctx, "core:mode", mode)
+	return nil
+}
+
+// --- Маршрутизация: правила и группы ---
+
+// GetRouting возвращает весь список правил и групп для UI.
+func (a *App) GetRouting() rules.Config {
+	if a.rules == nil {
+		return rules.Default()
+	}
+	return a.rules.Get()
+}
+
+// withRouting меняет правила и сразу применяет их к живому ядру. Если ядро
+// отвергло новый конфиг (или не смогло перезапуститься), правки откатываются:
+// иначе на диске осталось бы правило, о котором ядро не знает, — UI показывает
+// одно, трафик идёт по-другому, и разобраться в этом пользователю нечем.
+func (a *App) withRouting(mutate func() error) error {
+	if a.rules == nil {
+		return fmt.Errorf("правила не готовы")
+	}
+	prev := a.rules.Get() // глубокая копия — состояние до правки
+	if err := mutate(); err != nil {
+		return err
+	}
+	if err := a.applyRouting(); err != nil {
+		if rerr := a.rules.Replace(prev); rerr != nil {
+			return fmt.Errorf("%w (откатить правила не удалось: %v)", err, rerr)
+		}
+		return err
 	}
 	return nil
+}
+
+// SetRouting заменяет список правил целиком (drag-n-drop в UI) и применяет
+// изменения к работающему ядру.
+func (a *App) SetRouting(cfg rules.Config) error {
+	return a.withRouting(func() error { return a.rules.Replace(cfg) })
+}
+
+// AddRule добавляет правило в конец списка и возвращает его ID.
+func (a *App) AddRule(r rules.Rule) (string, error) {
+	var id string
+	err := a.withRouting(func() error {
+		var e error
+		id, e = a.rules.AddRule(r)
+		return e
+	})
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// UpdateRule сохраняет изменённое правило.
+func (a *App) UpdateRule(r rules.Rule) error {
+	return a.withRouting(func() error { return a.rules.UpdateRule(r) })
+}
+
+// DeleteRule удаляет правило (встроенные удалить нельзя — только выключить).
+func (a *App) DeleteRule(id string) error {
+	return a.withRouting(func() error { return a.rules.DeleteRule(id) })
+}
+
+// MoveRule переставляет правило на позицию index — порядок задаёт приоритет.
+func (a *App) MoveRule(id string, index int) error {
+	return a.withRouting(func() error { return a.rules.MoveRule(id, index) })
+}
+
+// SetRuleEnabled включает или выключает правило.
+func (a *App) SetRuleEnabled(id string, enabled bool) error {
+	return a.withRouting(func() error { return a.rules.SetRuleEnabled(id, enabled) })
+}
+
+// SetRoutingFinal задаёт судьбу трафика, не попавшего ни под одно правило:
+// rules.ActionProxy (всё через прокси) или rules.ActionDirect (сплит-туннель).
+func (a *App) SetRoutingFinal(final string) error {
+	return a.withRouting(func() error {
+		return a.rules.Update(func(c *rules.Config) { c.Final = final })
+	})
+}
+
+// AddGroup создаёт группу нод и возвращает её ID.
+func (a *App) AddGroup(g rules.Group) (string, error) {
+	var id string
+	err := a.withRouting(func() error {
+		var e error
+		id, e = a.rules.AddGroup(g)
+		return e
+	})
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// UpdateGroup сохраняет изменённую группу (переименование тянет за собой
+// ссылки правил).
+func (a *App) UpdateGroup(g rules.Group) error {
+	return a.withRouting(func() error { return a.rules.UpdateGroup(g) })
+}
+
+// DeleteGroup удаляет группу; ссылавшиеся на неё правила переходят на основной
+// селектор.
+func (a *App) DeleteGroup(id string) error {
+	return a.withRouting(func() error { return a.rules.DeleteGroup(id) })
+}
+
+// applyRouting пересобирает конфиг с новыми правилами и перезапускает ядро,
+// если оно работает. Перезапуск идёт через Manager.Restart — он не показывает
+// промежуточное «остановлено», иначе с активного соединения слетел бы системный
+// прокси и пользователь на секунду остался бы без интернета.
+func (a *App) applyRouting() error {
+	if a.manager == nil || a.manager.State() != core.StateRunning {
+		return nil // применится при следующем подключении
+	}
+	if a.store == nil {
+		return nil
+	}
+	activeID := a.store.ActiveID()
+	if activeID == "" {
+		return nil
+	}
+	nodes, err := a.store.ResolveNodes(activeID)
+	if err != nil {
+		return err
+	}
+	enableTUN := a.settings != nil && a.settings.Get().EnableTUN
+	cfg, err := config.Generate(a.configOptions(nodes, enableTUN))
+	if err != nil {
+		return err
+	}
+	// Битый конфиг не должен ронять живое соединение: проверяем до перезапуска.
+	if err := a.manager.Check(cfg); err != nil {
+		return err
+	}
+	return a.manager.Restart(cfg)
 }
 
 // GetSettings возвращает сохранённые настройки (для инициализации UI).
@@ -771,31 +976,6 @@ func (a *App) autoRefreshSubs() {
 	if changed {
 		runtime.EventsEmit(a.ctx, "profiles:changed", nil)
 	}
-}
-
-// --- Свои правила маршрутизации ---
-
-// SetCustomRules сохраняет пользовательские домены (применяются при подключении).
-func (a *App) SetCustomRules(direct, proxy, block []string) error {
-	if a.settings == nil {
-		return nil
-	}
-	return a.settings.Update(func(s *settings.Settings) {
-		s.DirectDomains = cleanDomains(direct)
-		s.ProxyDomains = cleanDomains(proxy)
-		s.BlockDomains = cleanDomains(block)
-	})
-}
-
-func cleanDomains(in []string) []string {
-	var out []string
-	for _, d := range in {
-		d = strings.ToLower(strings.TrimSpace(d))
-		if d != "" {
-			out = append(out, d)
-		}
-	}
-	return out
 }
 
 // --- Clash API: ноды, задержка, переключение, статистика ---

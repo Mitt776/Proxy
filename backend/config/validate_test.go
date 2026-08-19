@@ -60,44 +60,6 @@ func TestGeneratedConfigValidates(t *testing.T) {
 	t.Logf("✅ sing-box check прошёл для %d нод всех протоколов", len(nodes))
 }
 
-// TestRoutingConfigValidates проверяет конфиг со сплит-туннелем «РФ напрямую» и
-// блокировкой рекламы: валидирует rule_set (.srs), ip_is_private и action reject.
-func TestRoutingConfigValidates(t *testing.T) {
-	assets := os.Getenv("PROXY_ASSETS")
-	if assets == "" {
-		t.Skip("PROXY_ASSETS не задан")
-	}
-	bin := filepath.Join(assets, "sing-box.exe")
-
-	node, err := ParseLink("trojan://pw@tr.example.com:443?sni=tr.example.com#n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Generate(Options{
-		ClashSecret: "x", CacheDBPath: "cache.db",
-		Nodes:         []Node{node},
-		RoutingMode:   RoutingRUDirect,
-		BlockAds:      true,
-		RuleSetDir:    assets,
-		DirectDomains: []string{"example.com", "  LOCAL.dev "},
-		ProxyDomains:  []string{"youtube.com"},
-		BlockDomains:  []string{"ads.example.net"},
-	})
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(cfgPath, cfg, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command(bin, "check", "-c", cfgPath, "-D", dir).CombinedOutput()
-	if err != nil {
-		t.Fatalf("sing-box check маршрутизации ПРОВАЛИЛСЯ: %v\n%s\n---config---\n%s", err, out, cfg)
-	}
-	t.Log("✅ конфиг сплит-туннеля РФ + блок рекламы валиден")
-}
-
 // TestTUNConfigValidates проверяет, что конфиг с включённым TUN валиден по схеме
 // (реальный адаптер требует прав администратора и проверяется в GUI).
 func TestTUNConfigValidates(t *testing.T) {

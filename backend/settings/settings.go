@@ -5,6 +5,7 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,8 +13,8 @@ import (
 
 // Settings — сохраняемые настройки приложения.
 type Settings struct {
-	RoutingMode    string `json:"routingMode"`    // global | ru-direct
-	BlockAds       bool   `json:"blockAds"`       // блок рекламных доменов
+	RoutingMode    string `json:"routingMode"`    // устарело (до 1.2.0): global | ru-direct
+	BlockAds       bool   `json:"blockAds"`       // устарело (до 1.2.0): блок рекламных доменов
 	EnableTUN      bool   `json:"enableTUN"`      // последний выбранный режим перехвата
 	Autostart      bool   `json:"autostart"`      // запуск вместе с Windows
 	MinimizeToTray bool   `json:"minimizeToTray"` // сворачивать в трей вместо закрытия
@@ -21,16 +22,28 @@ type Settings struct {
 
 	SubUpdateHours int `json:"subUpdateHours"` // автообновление подписок каждые N часов (0 = выкл)
 
+	// Mode — режим маршрутизации Clash API: Rule (работают правила), Global
+	// (всё через прокси) или Direct (всё напрямую). Пустое значение = Rule,
+	// поэтому старые settings.json подхватываются без миграции.
+	Mode string `json:"mode"`
+
 	// AllowQUIC: разрешить QUIC/HTTP-3 в TUN. По умолчанию (false) QUIC режется —
 	// иначе на TCP-нодах (vless-vision, xhttp) UDP:443 уходит в чёрную дыру и
 	// ломаются Google/YouTube/медиа. Инверсия сделана ради нулевого значения:
 	// старые settings.json без поля → false → QUIC режется (безопасный дефолт).
 	AllowQUIC bool `json:"allowQuic"`
 
-	// Свои правила маршрутизации (домены, по одному в списке) поверх пресетов.
-	DirectDomains []string `json:"directDomains"` // всегда напрямую
-	ProxyDomains  []string `json:"proxyDomains"`  // всегда через прокси
-	BlockDomains  []string `json:"blockDomains"`  // блокировать
+	// LogLevel — уровень журнала ядра: trace|debug|info|warn|error.
+	// Пустое значение = info (так же читаются файлы старых версий).
+	LogLevel string `json:"logLevel"`
+
+	// Наследие версий до 1.2.0: режим маршрутизации, блок рекламы и три плоских
+	// списка доменов. Начиная с 1.2.0 всё это живёт единым упорядоченным списком
+	// в data\routing.json (backend/rules). Поля остаются только для миграции при
+	// первом запуске новой версии — приложение их больше не пишет.
+	DirectDomains []string `json:"directDomains"` // устарело: всегда напрямую
+	ProxyDomains  []string `json:"proxyDomains"`  // устарело: всегда через прокси
+	BlockDomains  []string `json:"blockDomains"`  // устарело: блокировать
 }
 
 // Defaults возвращает настройки по умолчанию.
@@ -62,10 +75,19 @@ func Load(dataDir string) (*Store, error) {
 		if os.IsNotExist(err) {
 			return s, nil
 		}
-		return nil, err
+		return s, err // хранилище рабочее (с дефолтами), об ошибке сообщаем наверх
 	}
-	// Повреждённый файл не роняет приложение — откатываемся к дефолтам.
-	_ = json.Unmarshal(b, &s.data)
+	// Повреждённый файл не роняет приложение — откатываемся к дефолтам, а сам
+	// файл отводим в сторону: иначе первое же сохранение затрёт его содержимое,
+	// и разобраться, что там было, будет уже негде.
+	if uerr := json.Unmarshal(b, &s.data); uerr != nil {
+		s.data = Defaults()
+		bad := s.path + ".bad"
+		if rerr := os.Rename(s.path, bad); rerr != nil {
+			return s, fmt.Errorf("settings.json повреждён: %w", uerr)
+		}
+		return s, fmt.Errorf("settings.json повреждён, сохранён как %s: %w", filepath.Base(bad), uerr)
+	}
 	return s, nil
 }
 

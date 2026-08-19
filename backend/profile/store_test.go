@@ -1,6 +1,10 @@
 package profile
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestManualProfileLifecycle(t *testing.T) {
 	dir := t.TempDir()
@@ -58,5 +62,54 @@ func TestAddManualRejectsGarbage(t *testing.T) {
 	s, _ := Load(t.TempDir())
 	if _, err := s.AddManual("bad", "это не ссылка и не json"); err == nil {
 		t.Errorf("ожидалась ошибка на мусорном вводе")
+	}
+}
+
+// TestLoadCorruptedFile: битый profiles.json не должен ронять приложение и не
+// должен молча пропадать. Load обязан вернуть рабочее (пустое) хранилище,
+// ошибку — наверх, а прежний файл отложить рядом.
+func TestLoadCorruptedFile(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"profiles": [сломано`
+	if err := os.WriteFile(filepath.Join(dir, "profiles.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load(dir)
+	if err == nil {
+		t.Fatal("ожидалась ошибка о повреждённом файле")
+	}
+	if s == nil {
+		t.Fatal("Load вернул nil-хранилище: вызовы App упадут на разыменовании")
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("ожидался пустой список профилей, получено %d", len(s.List()))
+	}
+	bad, rerr := os.ReadFile(filepath.Join(dir, "profiles.json.bad"))
+	if rerr != nil {
+		t.Fatalf("битый файл не сохранён как profiles.json.bad: %v", rerr)
+	}
+	if string(bad) != raw {
+		t.Fatalf("в profiles.json.bad не исходное содержимое: %q", bad)
+	}
+
+	// Хранилище остаётся рабочим: новый профиль сохраняется поверх.
+	if _, err := s.AddManual("Новый", "vless://11111111-1111-1111-1111-111111111111@x.com:443?security=tls&sni=x.com#n"); err != nil {
+		t.Fatalf("хранилище после сбоя нерабочее: %v", err)
+	}
+}
+
+// TestListReturnsCopies: List отдаёт копии, а не указатели на внутренние
+// объекты — иначе трей и планировщик подписок читают то, что Refresh правит.
+func TestListReturnsCopies(t *testing.T) {
+	s, _ := Load(t.TempDir())
+	if _, err := s.AddManual("Профиль", "vless://11111111-1111-1111-1111-111111111111@x.com:443?security=tls&sni=x.com#n"); err != nil {
+		t.Fatal(err)
+	}
+	list := s.List()
+	list[0].Name = "подменено"
+
+	if got := s.List()[0].Name; got == "подменено" {
+		t.Fatal("List отдал указатель на внутренний профиль — его правка утекла в хранилище")
 	}
 }

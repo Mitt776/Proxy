@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
@@ -206,5 +207,49 @@ func TestDecodeSubscriptionClash(t *testing.T) {
 	}
 	if len(nodes) != 2 {
 		t.Fatalf("нод = %d, want 2", len(nodes))
+	}
+}
+
+// TestXHTTPExtraNumbers проверяет, что числа из параметра extra попадают в
+// конфиг как обычные числа. json.Unmarshal кладёт их в float64, и наивный
+// fmt.Sprint давал "1e+06" — ядро такое значение не принимает.
+func TestXHTTPExtraNumbers(t *testing.T) {
+	extra := `{"scMaxEachPostBytes":1000000,"scMinPostsIntervalMs":30,` +
+		`"uplinkChunkSize":1048576,"xPaddingObfsMode":false}`
+	link := "vless://11111111-1111-1111-1111-111111111111@x.com:443" +
+		"?security=reality&pbk=k&sni=x.com&type=xhttp" +
+		"&extra=" + url.QueryEscape(extra) + "#xh"
+
+	node, err := ParseLink(link)
+	if err != nil {
+		t.Fatalf("ParseLink: %v", err)
+	}
+	if bytes.Contains(node.Outbound, []byte("e+0")) {
+		t.Fatalf("в конфиге экспоненциальная запись числа: %s", node.Outbound)
+	}
+
+	var ob struct {
+		Transport struct {
+			MaxEachPost  string `json:"sc_max_each_post_bytes"`
+			MinInterval  string `json:"sc_min_posts_interval_ms"`
+			UplinkChunk  string `json:"uplink_chunk_size"`
+			XPaddingObfs bool   `json:"x_padding_obfs_mode"`
+		} `json:"transport"`
+	}
+	if err := json.Unmarshal(node.Outbound, &ob); err != nil {
+		t.Fatalf("outbound не JSON: %v", err)
+	}
+	tr := ob.Transport
+	if tr.MaxEachPost != "1000000" {
+		t.Errorf("sc_max_each_post_bytes = %q, want 1000000", tr.MaxEachPost)
+	}
+	if tr.MinInterval != "30" {
+		t.Errorf("sc_min_posts_interval_ms = %q, want 30", tr.MinInterval)
+	}
+	if tr.UplinkChunk != "1048576" {
+		t.Errorf("uplink_chunk_size = %q, want 1048576", tr.UplinkChunk)
+	}
+	if tr.XPaddingObfs {
+		t.Errorf("x_padding_obfs_mode = true, а в extra было false")
 	}
 }

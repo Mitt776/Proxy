@@ -17,6 +17,7 @@ import (
 
 	"Proxy/backend/config"
 	"Proxy/backend/core"
+	"Proxy/backend/rules"
 )
 
 func TestClashAPIAgainstCore(t *testing.T) {
@@ -49,9 +50,8 @@ func TestClashAPIAgainstCore(t *testing.T) {
 		LogLevel:     "info",
 		CacheDBPath:  "cache.db",
 		Nodes:        []config.Node{node},
-		RoutingMode:  config.RoutingRUDirect,
-		BlockAds:     true,
 		RuleSetDir:   assets,
+		Routing:      rules.Migrate("ru-direct", true, nil, nil, nil),
 	})
 	if err != nil {
 		t.Fatalf("генерация конфига: %v", err)

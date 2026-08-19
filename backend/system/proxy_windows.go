@@ -4,6 +4,7 @@ package system
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -17,10 +18,11 @@ const proxyBypass = "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;17
 
 // SystemProxy управляет системным HTTP-прокси Windows с бэкапом прежних настроек.
 type SystemProxy struct {
-	mu       sync.Mutex
-	active   bool
-	backup   proxyBackup
-	hasBack  bool
+	mu      sync.Mutex
+	active  bool
+	addr    string // адрес, который выставили мы (для распознавания «своего» прокси)
+	backup  proxyBackup
+	hasBack bool
 }
 
 type proxyBackup struct {
@@ -45,9 +47,20 @@ func (s *SystemProxy) Set(addr string) error {
 	defer k.Close()
 
 	if !s.hasBack {
-		s.backup = readBackup(k)
+		b := readBackup(k)
+		// В реестре уже стоит наш адрес — значит прошлый запуск умер, не убравшись.
+		// Такой «бэкап» восстанавливать нельзя: Clear вернул бы прокси на мёртвый
+		// порт и оставил пользователя без интернета.
+		if sameProxyAddr(b.server, addr) {
+			b = proxyBackup{}
+		}
+		s.backup = b
 		s.hasBack = true
 	}
+	s.addr = addr
+	// Взводим флаг до записи: если один из SetValue упадёт на полпути, реестр уже
+	// изменён, и Clear обязан его вычистить.
+	s.active = true
 
 	if err := k.SetDWordValue("ProxyEnable", 1); err != nil {
 		return err
@@ -59,7 +72,6 @@ func (s *SystemProxy) Set(addr string) error {
 		return err
 	}
 
-	s.active = true
 	notifyWinInet()
 	return nil
 }
@@ -70,8 +82,8 @@ func (s *SystemProxy) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.active {
-		return nil
+	if !s.active && !s.hasBack {
+		return nil // в этом сеансе прокси не ставили — чужие настройки не трогаем
 	}
 
 	k, err := registry.OpenKey(registry.CURRENT_USER, proxyRegPath, registry.SET_VALUE)
@@ -97,11 +109,61 @@ func (s *SystemProxy) Clear() error {
 	return nil
 }
 
+// ClearStale снимает системный прокси, оставшийся от прошлого запуска.
+// Если приложение убили (краш, taskkill, выключение питания) при активном
+// прокси, в реестре остаётся наш адрес — а слушать его уже некому, и у
+// пользователя «пропадает интернет» до ручной правки настроек Windows.
+// Трогаем реестр только когда там стоит именно наш адрес.
+func (s *SystemProxy) ClearStale(addr string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.active || addr == "" {
+		return false, nil // прокси наш и живой — это не остаток
+	}
+
+	k, err := registry.OpenKey(registry.CURRENT_USER, proxyRegPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return false, fmt.Errorf("открытие ключа реестра: %w", err)
+	}
+	defer k.Close()
+
+	cur := readBackup(k)
+	if cur.enable == 0 || !sameProxyAddr(cur.server, addr) {
+		return false, nil
+	}
+	if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
+		return false, err
+	}
+	notifyWinInet()
+	return true, nil
+}
+
 // Active сообщает, включён ли сейчас системный прокси нами.
 func (s *SystemProxy) Active() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.active
+}
+
+// sameProxyAddr сравнивает значение ProxyServer с нашим адресом. Windows пишет
+// туда либо "host:port", либо список вида "http=host:port;https=host:port" —
+// нашим считаем адрес, встретившийся в любой схеме.
+func sameProxyAddr(server, addr string) bool {
+	if server == "" || addr == "" {
+		return false
+	}
+	addr = strings.ToLower(strings.TrimSpace(addr))
+	for _, part := range strings.Split(strings.ToLower(server), ";") {
+		part = strings.TrimSpace(part)
+		if i := strings.Index(part, "="); i >= 0 {
+			part = part[i+1:]
+		}
+		if part == addr {
+			return true
+		}
+	}
+	return false
 }
 
 func readBackup(k registry.Key) proxyBackup {
