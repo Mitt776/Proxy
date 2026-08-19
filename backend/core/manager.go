@@ -30,6 +30,12 @@ const maxLogLines = 2000
 // stopTimeout — сколько ждём фактической смерти процесса после killProcessTree.
 const stopTimeout = 5 * time.Second
 
+// gracefulTimeout — сколько ждём ядро после requestGracefulStop, прежде чем
+// эскалировать до жёсткого killProcessTree. sing-box снимает TUN-маршруты и
+// удаляет wintun-адаптер в defer при штатном завершении; таймаут — на случай
+// зависшего ядра, а не обычный путь (обычно укладывается в доли секунды).
+const gracefulTimeout = 3 * time.Second
+
 // Manager запускает и останавливает sing-box.exe и собирает его вывод.
 // Он не зависит от Wails: наверх отдаёт события через колбэки OnLog/OnState,
 // которые app.go проксирует в runtime-события фронтенда.
@@ -233,6 +239,13 @@ func (m *Manager) Restart(configJSON []byte) error {
 // Stop останавливает ядро вместе с потомками и дожидается смерти процесса.
 // Ошибка означает, что процесс пережил таймаут: соврать здесь нельзя — поверх
 // живого ядра новое не поднимется, у него заняты порты (mixed 2080, API 9090).
+//
+// Сначала просим ядро завершиться штатно (requestGracefulStop) и ждём
+// gracefulTimeout: только так при активном TUN снимаются auto_route-маршруты
+// и удаляется wintun-адаптер (see proc_windows.go). Жёсткий killProcessTree —
+// эскалация для зависшего ядра, а не путь по умолчанию: он не даёт ядру
+// шанса на очистку, и в системе остаются «осиротевшие» TUN-маршруты —
+// у пользователя пропадает интернет даже после закрытия приложения.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	cmd := m.cmd
@@ -244,11 +257,22 @@ func (m *Manager) Stop() error {
 	pid := cmd.Process.Pid
 	m.mu.Unlock()
 
-	killProcessTree(pid) // Windows: taskkill /T /F с фолбэком
-
 	if done == nil { // процесс есть, а waitLoop не запущен — ждать нечего
+		killProcessTree(pid)
 		return nil
 	}
+
+	if requestGracefulStop(pid) {
+		select {
+		case <-done:
+			return nil
+		case <-time.After(gracefulTimeout):
+			// не отреагировало — переходим к жёсткой остановке ниже
+		}
+	}
+
+	killProcessTree(pid) // Windows: taskkill /T /F с фолбэком
+
 	select {
 	case <-done: // waitLoop дождался Wait() и обновил состояние
 		return nil
