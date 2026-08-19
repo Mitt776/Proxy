@@ -3,8 +3,10 @@ package system
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -30,6 +32,74 @@ func RelaunchElevated(extraArgs ...string) error {
 	cwd, _ := os.Getwd()
 	args := strings.Join(quoteArgs(extraArgs), " ")
 	return shellExecuteRunAs(exe, args, cwd)
+}
+
+// WaitForProcessExit ждёт завершения процесса с указанным PID, но не дольше timeout.
+// Возвращает true, если процесса уже нет. Нужно при UAC-перезапуске: ShellExecuteW
+// возвращает управление сразу после старта нового процесса, поэтому предок в этот
+// момент ещё жив и держит ресурсы, которые нельзя делить (см. WaitForWebviewRelease).
+func WaitForProcessExit(pid int, timeout time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return true // процесса уже нет либо он нам недоступен — ждать нечего
+	}
+	defer windows.CloseHandle(h)
+
+	ev, err := windows.WaitForSingleObject(h, uint32(timeout.Milliseconds()))
+	return err == nil && ev == windows.WAIT_OBJECT_0
+}
+
+// WaitForWebviewRelease ждёт, пока WebView2 предыдущего процесса отпустит свою
+// user data folder, но не дольше timeout. Возвращает true, если папка свободна.
+//
+// Зачем: WebView2 держит `lockfile` в профиле эксклюзивно, а обычный и elevated
+// процессы делят одну папку и не могут работать с ней одновременно — у второго
+// движок не поднимется и окно останется пустым (только BackgroundColour). Процессы
+// браузера переживают своего хозяина на доли секунды, поэтому ожидания одного лишь
+// PID мало. Всё best-effort: не нашли файл — считаем, что путь свободен.
+func WaitForWebviewRelease(timeout time.Duration) bool {
+	lock := webviewLockPath()
+	if lock == "" {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if webviewLockFree(lock) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// webviewLockPath — путь к lockfile профиля WebView2. По умолчанию движок кладёт
+// профиль в %APPDATA%\<имя exe с расширением>\EBWebView.
+func webviewLockPath() string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return ""
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(appData, filepath.Base(exe), "EBWebView", "lockfile")
+}
+
+// webviewLockFree проверяет, отпущен ли lockfile: живой WebView2 держит его без
+// права совместного доступа, поэтому открытие падает с ERROR_SHARING_VIOLATION.
+func webviewLockFree(path string) bool {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return os.IsNotExist(err) // файла нет — профиль точно никем не занят
+	}
+	_ = f.Close()
+	return true
 }
 
 // shellExecuteRunAs вызывает ShellExecuteW с глаголом "runas" (запуск с повышением).

@@ -30,6 +30,12 @@ import (
 // чтобы он сразу поднял TUN на активном профиле.
 const tunAutostartFlag = "--tun-autostart"
 
+// waitPidFlag (`--wait-pid=1234`) сообщает перезапущенному процессу PID предка,
+// которого нужно дождаться перед стартом GUI. Elevated- и обычный процесс делят
+// одну WebView2 user data folder, но не могут держать её одновременно из-за
+// разного integrity level — второй получит окно без содержимого.
+const waitPidFlag = "--wait-pid"
+
 // App — корневая структура приложения, биндится во фронтенд.
 type App struct {
 	ctx      context.Context
@@ -48,6 +54,11 @@ type App struct {
 	blockAds    bool
 
 	trayQuit bool // пользователь выбрал «Выход» в трее — разрешаем закрытие окна
+	// relaunching — идёт передача управления процессу, перезапущенному с UAC.
+	// Как и trayQuit, отключает перехват закрытия в beforeClose: иначе окно лишь
+	// спрячется в трей, старый процесс останется жить, и его WebView2 не пустит
+	// элевированный процесс к общей user data folder — окно будет пустым.
+	relaunching bool
 
 	wasRunning   bool // для уведомлений: было ли соединение активно
 	userStopping bool // пользователь сам нажал «Отключить» (не считаем обрывом)
@@ -170,8 +181,8 @@ func (a *App) shutdown(ctx context.Context) {
 // beforeClose перехватывает закрытие окна: по умолчанию прячем приложение в трей
 // (ядро продолжает работать). Реальное завершение — только через «Выход» в трее.
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
-	if a.trayQuit {
-		return false // пользователь явно выбрал выход
+	if a.trayQuit || a.relaunching {
+		return false // явный выход из трея либо передача управления elevated-процессу
 	}
 	minimize := true
 	if a.settings != nil {
@@ -352,13 +363,18 @@ func (a *App) Connect(enableTUN bool) error {
 
 	// TUN требует прав администратора для создания сетевого адаптера.
 	if enableTUN && !system.IsAdmin() {
-		if err := system.RelaunchElevated(tunAutostartFlag); err != nil {
+		// Свой PID — чтобы новый процесс дождался нашей смерти и только потом
+		// поднимал WebView2 (общую user data folder нельзя делить с elevated).
+		waitFlag := fmt.Sprintf("%s=%d", waitPidFlag, os.Getpid())
+		if err := system.RelaunchElevated(tunAutostartFlag, waitFlag); err != nil {
 			if errors.Is(err, system.ErrElevationCancelled) {
 				return fmt.Errorf("для режима TUN нужны права администратора — запрос отклонён")
 			}
 			return fmt.Errorf("не удалось получить права администратора: %w", err)
 		}
 		// Управление переходит к новому (elevated) процессу — закрываем текущий.
+		// Флаг обязателен: без него beforeClose спрячет окно в трей вместо выхода.
+		a.relaunching = true
 		runtime.Quit(a.ctx)
 		return nil
 	}

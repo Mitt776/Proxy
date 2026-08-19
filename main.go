@@ -2,6 +2,10 @@ package main
 
 import (
 	"embed"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"Proxy/backend/system"
 
@@ -14,6 +18,13 @@ import (
 var assets embed.FS
 
 func main() {
+	// Перезапуск с повышением прав ради TUN: прежний процесс ещё жив (ShellExecuteW
+	// вернул управление сразу после нашего старта) и держит общую WebView2 user data
+	// folder. Ждём, пока он уйдёт, иначе движок не поднимется и окно будет пустым.
+	if hasFlag(tunAutostartFlag) {
+		waitForPredecessor()
+	}
+
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -53,4 +64,30 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+// waitForPredecessor даёт процессу, который нас перезапустил, спокойно завершиться
+// и отпустить WebView2. Оба ожидания — с потолком по времени: если предок почему-то
+// подвис, лучше стартовать с риском пустого окна, чем не стартовать вовсе.
+func waitForPredecessor() {
+	if pid, ok := flagInt(waitPidFlag); ok {
+		system.WaitForProcessExit(pid, 10*time.Second)
+	}
+	system.WaitForWebviewRelease(5 * time.Second)
+}
+
+// flagInt читает числовое значение флага вида `--wait-pid=1234`.
+func flagInt(name string) (int, bool) {
+	prefix := name + "="
+	for _, a := range os.Args[1:] {
+		if !strings.HasPrefix(a, prefix) {
+			continue
+		}
+		v, err := strconv.Atoi(strings.TrimPrefix(a, prefix))
+		if err != nil {
+			return 0, false
+		}
+		return v, true
+	}
+	return 0, false
 }
