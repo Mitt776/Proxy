@@ -12,7 +12,7 @@
   },
   "info": {
     "productName": "MitM",
-    "productVersion": "2.0.1",
+    "productVersion": "2.0.2",
     "companyName": "MitM",
     "comments": "Портативный прокси-клиент на базе sing-box"
   }

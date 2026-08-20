@@ -33,7 +33,7 @@ const appName = "MitM"
 // AppVersion — версия приложения. Единственный источник правды для UI и трея;
 // при выпуске бампится здесь и в wails.json (блок `info.productVersion`, откуда
 // её берут свойства exe-файла).
-const AppVersion = "2.0.1"
+const AppVersion = "2.0.2"
 
 // tunAutostartFlag передаётся перезапущенному с повышением прав процессу,
 // чтобы он сразу поднял TUN на активном профиле.
@@ -328,13 +328,29 @@ func (a *App) GetActiveProfileID() string {
 	return a.store.ActiveID()
 }
 
+// emitProfilesChanged — сообщить UI, что список профилей или активный профиль
+// изменились.
+//
+// Событие нужно не только вкладке «Профили» (она перечитывает список сама): на
+// нём висит имя активного профиля в оболочке, а от него — доступность кнопки
+// подключения. Первый добавленный профиль становится активным внутри стора
+// молча, поэтому без события кнопка оставалась серой до перезапуска приложения.
+func (a *App) emitProfilesChanged() {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "profiles:changed", nil)
+	}
+}
+
 // AddManualProfile создаёт ручной профиль из ссылок/JSON.
 func (a *App) AddManualProfile(name, raw string) (*profile.Profile, error) {
 	if a.store == nil {
 		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	p, err := a.store.AddManual(name, raw)
-	a.rebuildTrayProfiles()
+	if err == nil {
+		a.rebuildTrayProfiles()
+		a.emitProfilesChanged()
+	}
 	return p, err
 }
 
@@ -344,7 +360,10 @@ func (a *App) AddSubscriptionProfile(name, url string) (*profile.Profile, error)
 		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	p, err := a.store.AddSubscription(a.ctx, name, url)
-	a.rebuildTrayProfiles()
+	if err == nil {
+		a.rebuildTrayProfiles()
+		a.emitProfilesChanged()
+	}
 	return p, err
 }
 
@@ -353,7 +372,11 @@ func (a *App) RefreshProfile(id string) (*profile.Profile, error) {
 	if a.store == nil {
 		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
-	return a.store.Refresh(a.ctx, id)
+	p, err := a.store.Refresh(a.ctx, id)
+	if err == nil {
+		a.emitProfilesChanged()
+	}
+	return p, err
 }
 
 // DeleteProfile удаляет профиль.
@@ -362,7 +385,10 @@ func (a *App) DeleteProfile(id string) error {
 		return codedErr(ErrNotReady, "хранилище не готово")
 	}
 	err := a.store.Delete(id)
-	a.rebuildTrayProfiles()
+	if err == nil {
+		a.rebuildTrayProfiles()
+		a.emitProfilesChanged()
+	}
 	return err
 }
 
@@ -388,9 +414,7 @@ func (a *App) SetActiveProfile(id string) error {
 		a.rebuildTrayProfiles()
 		return err
 	}
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "profiles:changed", nil)
-	}
+	a.emitProfilesChanged()
 	return nil
 }
 
@@ -1118,7 +1142,7 @@ func (a *App) autoRefreshSubs() {
 		}
 	}
 	if changed {
-		runtime.EventsEmit(a.ctx, "profiles:changed", nil)
+		a.emitProfilesChanged()
 	}
 }
 

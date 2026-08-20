@@ -113,3 +113,31 @@ func TestListReturnsCopies(t *testing.T) {
 		t.Fatal("List отдал указатель на внутренний профиль — его правка утекла в хранилище")
 	}
 }
+
+// TestDeleteActivePromotesNext: удаление активного профиля не должно оставлять
+// хранилище с профилями, но без активного — в таком состоянии UI показывает
+// список нод и при этом не даёт подключиться.
+func TestDeleteActivePromotesNext(t *testing.T) {
+	s, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.AddManual("Первый", "trojan://p@a.example.com:443#A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AddManual("Второй", "trojan://p@b.example.com:443#B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ActiveID() != first.ID {
+		t.Fatalf("активным должен быть первый профиль")
+	}
+
+	if err := s.Delete(first.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if s.ActiveID() != second.ID {
+		t.Errorf("активный id = %q, ожидался оставшийся профиль %q", s.ActiveID(), second.ID)
+	}
+}

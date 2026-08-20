@@ -244,7 +244,12 @@ func (s *Store) Delete(id string) error {
 		if p.ID == id {
 			s.data.Profiles = append(s.data.Profiles[:i], s.data.Profiles[i+1:]...)
 			if s.data.ActiveID == id {
+				// Активным становится первый из оставшихся: иначе профили есть,
+				// а подключиться нельзя — активного-то нет.
 				s.data.ActiveID = ""
+				if len(s.data.Profiles) > 0 {
+					s.data.ActiveID = s.data.Profiles[0].ID
+				}
 			}
 			return s.save()
 		}
