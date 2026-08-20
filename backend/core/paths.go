@@ -12,7 +12,7 @@ import (
 //     (папка assets или сам каталог exe), затем в ./assets относительно рабочего
 //     каталога — это покрывает режим `wails dev`, где cwd = корень проекта.
 //   - Рабочие данные (config.json, профили, кэш, логи) пишутся в подпапку data/
-//     рядом с exe; если каталог только для чтения — фолбэк на %LOCALAPPDATA%\Proxy.
+//     рядом с exe; если каталог только для чтения — фолбэк на %LOCALAPPDATA%\MitM.
 type Paths struct {
 	AssetsDir string // где лежат sing-box.exe, wintun.dll, geoip.db, geosite.db
 	DataDir   string // куда пишем config.json, профили, кэш, логи
@@ -25,7 +25,10 @@ type Paths struct {
 	ConfigPath string // сгенерированный config.json
 }
 
-const appName = "Proxy"
+// appName — имя подпапки в %LOCALAPPDATA% для фолбэка данных. До 2.0.0 здесь
+// было "Proxy": после переименования старый каталог остаётся на диске мусором,
+// но он задействуется только когда каталог рядом с exe недоступен на запись.
+const appName = "MitM"
 
 // ResolvePaths вычисляет пути один раз при старте приложения.
 func ResolvePaths() (*Paths, error) {
@@ -86,7 +89,7 @@ func resolveDataDir() (string, error) {
 			return portable, nil
 		}
 	}
-	// 2) Фолбэк: %LOCALAPPDATA%\Proxy.
+	// 2) Фолбэк: %LOCALAPPDATA%\MitM.
 	if base, err := os.UserConfigDir(); err == nil {
 		fallback := filepath.Join(base, appName)
 		if err := os.MkdirAll(fallback, 0o755); err == nil {

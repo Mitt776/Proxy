@@ -11,7 +11,11 @@ import (
 // работает для портативного exe (значение — путь к текущему файлу).
 const (
 	autostartKey  = `Software\Microsoft\Windows\CurrentVersion\Run`
-	autostartName = "Proxy"
+	autostartName = "MitM"
+	// legacyAutostartName — имя записи до переименования приложения (версии 1.x).
+	// После обновления она указывает на исчезнувший Proxy.exe, то есть остаётся
+	// мусором, который вдобавок тихо ломает автозапуск. Чистим при любой правке.
+	legacyAutostartName = "Proxy"
 )
 
 // SetAutostart включает или выключает автозапуск приложения вместе с Windows.
@@ -22,6 +26,12 @@ func SetAutostart(enable bool) error {
 		return err
 	}
 	defer k.Close()
+
+	// Запись со старым именем убираем всегда: при включении она бы дублировала
+	// новую (и вела на несуществующий exe), при выключении — осталась бы одна.
+	if err := k.DeleteValue(legacyAutostartName); err != nil && err != registry.ErrNotExist {
+		return err
+	}
 
 	if !enable {
 		if err := k.DeleteValue(autostartName); err != nil && err != registry.ErrNotExist {

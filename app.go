@@ -28,6 +28,14 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// appName — имя приложения в заголовке окна, трее и уведомлениях Windows.
+const appName = "MitM"
+
+// AppVersion — версия приложения. Единственный источник правды для UI и трея;
+// при выпуске бампится здесь и в wails.json (блок `info.productVersion`, откуда
+// её берут свойства exe-файла).
+const AppVersion = "2.0.0"
+
 // tunAutostartFlag передаётся перезапущенному с повышением прав процессу,
 // чтобы он сразу поднял TUN на активном профиле.
 const tunAutostartFlag = "--tun-autostart"
@@ -64,6 +72,12 @@ type App struct {
 
 	wasRunning   atomic.Bool // для уведомлений: было ли соединение активно
 	userStopping atomic.Bool // пользователь сам нажал «Отключить» (не считаем обрывом)
+
+	// connectedAt — момент перехода ядра в running (unix-миллисекунды), 0 = не
+	// подключены. Отсюда фронтенд считает время сессии как now - since. Именно
+	// метку времени, а не счётчик: в скрытом окне (свёрнуты в трей) WebView2
+	// троттлит таймеры, и любой инкрементный счётчик уплыл бы на минуты.
+	connectedAt atomic.Int64
 
 	clashSecret string
 	clashPort   int
@@ -120,6 +134,9 @@ func (a *App) startup(ctx context.Context) {
 	a.settings = set
 	cur := set.Get()
 
+	// Язык интерфейса нужен раньше трея: меню строится сразу на нужном языке.
+	trayLang.Store(a.currentLang())
+
 	// Правила маршрутизации. Если routing.json ещё нет (обновление с версии до
 	// 1.2.0 или чистая установка) — собираем список из старых настроек, чтобы
 	// поведение не поменялось под пользователем.
@@ -148,21 +165,28 @@ func (a *App) startup(ctx context.Context) {
 			// Уведомление об обрыве только если соединение было активно и его
 			// разорвал не сам пользователь.
 			if a.wasRunning.Load() && !a.userStopping.Load() {
-				trayNotify("Соединение разорвано", "Прокси отключился — трафик идёт напрямую")
+				tt := trayT()
+				trayNotify(tt.NotifyLostTitle, tt.NotifyLostBody)
 			}
 			a.wasRunning.Store(false)
 			a.userStopping.Store(false)
+			a.connectedAt.Store(0)
 			updateTraySpeed(0, 0)
 		}
 		if state == core.StateRunning {
 			a.startStatsPoller()
+			// Отсчёт сессии начинаем только на переходе в running: при перезапуске
+			// ядра ради правил (Manager.Restart) состояние сюда не приходит, и
+			// таймер честно продолжает идти с момента подключения.
+			a.connectedAt.CompareAndSwap(0, time.Now().UnixMilli())
 			if !a.wasRunning.Swap(true) {
-				trayNotify("Подключено", "Прокси активен")
+				tt := trayT()
+				trayNotify(tt.NotifyUpTitle, tt.NotifyUpBody)
 			}
 		}
 		updateTrayMenu(string(state))
-		runtime.EventsEmit(a.ctx, "core:state", map[string]string{
-			"state": string(state), "reason": reason,
+		runtime.EventsEmit(a.ctx, "core:state", map[string]any{
+			"state": string(state), "reason": reason, "since": a.connectedAt.Load(),
 		})
 	}
 	a.manager = m
@@ -235,6 +259,7 @@ func (a *App) onSecondInstance(_ options.SecondInstanceData) {
 
 // AppInfo — сводка готовности окружения.
 type AppInfo struct {
+	AppVersion  string `json:"appVersion"`
 	CoreVersion string `json:"coreVersion"`
 	CoreFound   bool   `json:"coreFound"`
 	CorePath    string `json:"corePath"`   // эффективный путь к ядру
@@ -242,14 +267,25 @@ type AppInfo struct {
 	AssetsDir   string `json:"assetsDir"`
 	DataDir     string `json:"dataDir"`
 	State       string `json:"state"`
+	Since       int64  `json:"since"`       // начало сессии, unix ms (0 = не подключены)
+	IsAdmin     bool   `json:"isAdmin"`     // запущены с правами администратора
+	Lang        string `json:"lang"`        // язык интерфейса: ru|en
+	StartHidden bool   `json:"startHidden"` // автозапуск в трей — заставку не крутим
 }
 
 // GetAppInfo возвращает информацию об окружении и версии ядра.
 func (a *App) GetAppInfo() AppInfo {
-	info := AppInfo{State: string(core.StateStopped)}
+	info := AppInfo{
+		AppVersion:  AppVersion,
+		State:       string(core.StateStopped),
+		IsAdmin:     system.IsAdmin(),
+		Lang:        a.currentLang(),
+		StartHidden: hasFlag(system.MinimizedFlag),
+	}
 	if a.paths == nil {
 		return info
 	}
+	info.Since = a.connectedAt.Load()
 	info.AssetsDir = a.paths.AssetsDir
 	info.DataDir = a.paths.DataDir
 	info.State = string(a.manager.State())
@@ -285,7 +321,7 @@ func (a *App) GetActiveProfileID() string {
 // AddManualProfile создаёт ручной профиль из ссылок/JSON.
 func (a *App) AddManualProfile(name, raw string) (*profile.Profile, error) {
 	if a.store == nil {
-		return nil, fmt.Errorf("хранилище не готово")
+		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	p, err := a.store.AddManual(name, raw)
 	a.rebuildTrayProfiles()
@@ -295,7 +331,7 @@ func (a *App) AddManualProfile(name, raw string) (*profile.Profile, error) {
 // AddSubscriptionProfile создаёт профиль-подписку по URL.
 func (a *App) AddSubscriptionProfile(name, url string) (*profile.Profile, error) {
 	if a.store == nil {
-		return nil, fmt.Errorf("хранилище не готово")
+		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	p, err := a.store.AddSubscription(a.ctx, name, url)
 	a.rebuildTrayProfiles()
@@ -305,7 +341,7 @@ func (a *App) AddSubscriptionProfile(name, url string) (*profile.Profile, error)
 // RefreshProfile перезагружает подписку.
 func (a *App) RefreshProfile(id string) (*profile.Profile, error) {
 	if a.store == nil {
-		return nil, fmt.Errorf("хранилище не готово")
+		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	return a.store.Refresh(a.ctx, id)
 }
@@ -313,7 +349,7 @@ func (a *App) RefreshProfile(id string) (*profile.Profile, error) {
 // DeleteProfile удаляет профиль.
 func (a *App) DeleteProfile(id string) error {
 	if a.store == nil {
-		return fmt.Errorf("хранилище не готово")
+		return codedErr(ErrNotReady, "хранилище не готово")
 	}
 	err := a.store.Delete(id)
 	a.rebuildTrayProfiles()
@@ -321,13 +357,31 @@ func (a *App) DeleteProfile(id string) error {
 }
 
 // SetActiveProfile помечает профиль активным.
+//
+// На живом соединении смена профиля обязана менять и трафик: раньше метод только
+// записывал ID, ядро продолжало работать на прежних нодах, и «Сменить профиль»
+// молча ничего не делало до переподключения. Пересборка идёт тем же путём, что и
+// правки правил (`applyRouting` → `Manager.Restart`), поэтому системный прокси с
+// активного соединения не слетает. Не принятый ядром профиль откатывается.
 func (a *App) SetActiveProfile(id string) error {
 	if a.store == nil {
-		return fmt.Errorf("хранилище не готово")
+		return codedErr(ErrNotReady, "хранилище не готово")
 	}
-	err := a.store.SetActive(id)
+	prev := a.store.ActiveID()
+	if err := a.store.SetActive(id); err != nil {
+		return err
+	}
 	a.rebuildTrayProfiles()
-	return err
+
+	if err := a.applyRouting(); err != nil {
+		_ = a.store.SetActive(prev)
+		a.rebuildTrayProfiles()
+		return err
+	}
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "profiles:changed", nil)
+	}
+	return nil
 }
 
 // NodeInfo — краткое описание ноды для UI.
@@ -339,7 +393,7 @@ type NodeInfo struct {
 // ListProfileNodes возвращает ноды профиля (для выбора в UI).
 func (a *App) ListProfileNodes(id string) ([]NodeInfo, error) {
 	if a.store == nil {
-		return nil, fmt.Errorf("хранилище не готово")
+		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	nodes, err := a.store.ResolveNodes(id)
 	if err != nil {
@@ -352,7 +406,7 @@ func (a *App) ListProfileNodes(id string) ([]NodeInfo, error) {
 // (в mixed-режиме, с текущими настройками маршрутизации) — для копирования/шаринга.
 func (a *App) ProfileConfigJSON(id string) (string, error) {
 	if a.store == nil {
-		return "", fmt.Errorf("хранилище не готово")
+		return "", codedErr(ErrNotReady, "хранилище не готово")
 	}
 	nodes, err := a.store.ResolveNodes(id)
 	if err != nil {
@@ -368,11 +422,11 @@ func (a *App) ProfileConfigJSON(id string) (string, error) {
 // ProfileRaw возвращает исходный ввод профиля (ссылки/JSON или тело подписки).
 func (a *App) ProfileRaw(id string) (string, error) {
 	if a.store == nil {
-		return "", fmt.Errorf("хранилище не готово")
+		return "", codedErr(ErrNotReady, "хранилище не готово")
 	}
 	p := a.store.Get(id)
 	if p == nil {
-		return "", fmt.Errorf("профиль не найден")
+		return "", codedErr(ErrProfileNotFound, "профиль не найден")
 	}
 	return p.Raw, nil
 }
@@ -383,7 +437,7 @@ func (a *App) ProfileRaw(id string) (string, error) {
 // Для TUN при отсутствии прав администратора приложение перезапускается с UAC.
 func (a *App) Connect(enableTUN bool) error {
 	if a.store == nil || a.manager == nil {
-		return fmt.Errorf("приложение не инициализировано")
+		return codedErr(ErrNotReady, "приложение не инициализировано")
 	}
 
 	// TUN требует прав администратора для создания сетевого адаптера.
@@ -393,9 +447,9 @@ func (a *App) Connect(enableTUN bool) error {
 		waitFlag := fmt.Sprintf("%s=%d", waitPidFlag, os.Getpid())
 		if err := system.RelaunchElevated(tunAutostartFlag, waitFlag); err != nil {
 			if errors.Is(err, system.ErrElevationCancelled) {
-				return fmt.Errorf("для режима TUN нужны права администратора — запрос отклонён")
+				return codedErr(ErrTUNRights, "для режима TUN нужны права администратора — запрос отклонён")
 			}
-			return fmt.Errorf("не удалось получить права администратора: %w", err)
+			return codedErrf(ErrElevate, "не удалось получить права администратора: %w", err)
 		}
 		// Режим запоминаем только теперь: откажи пользователь в UAC — и следующий
 		// запуск (автозапуск, кнопка в трее) снова полез бы за правами.
@@ -409,7 +463,7 @@ func (a *App) Connect(enableTUN bool) error {
 
 	activeID := a.store.ActiveID()
 	if activeID == "" {
-		return fmt.Errorf("не выбран активный профиль")
+		return codedErr(ErrNoProfile, "не выбран активный профиль")
 	}
 	nodes, err := a.store.ResolveNodes(activeID)
 	if err != nil {
@@ -465,10 +519,21 @@ func (a *App) configOptions(nodes []config.Node, enableTUN bool) config.Options 
 	}
 	if a.paths != nil {
 		opts.RuleSetDir = a.paths.AssetsDir
+		opts.ListSetDir = a.listSetDir()
 		opts.GeoIPPath = a.paths.GeoIP
 		opts.GeoSitePath = a.paths.GeoSite
 	}
 	return opts
+}
+
+// listSetDir — каталог со списками .lst, сконвертированными в source-наборы.
+// Лежит в данных, а не в ассетах: содержимое качается и переписывается, а
+// каталог ассетов может быть только для чтения.
+func (a *App) listSetDir() string {
+	if a.paths == nil {
+		return ""
+	}
+	return filepath.Join(a.paths.DataDir, "rulesets")
 }
 
 func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
@@ -479,7 +544,7 @@ func (a *App) startCore(nodes []config.Node, enableTUN bool) error {
 	// Проверяем конфиг ядром до запуска: иначе о неподдерживаемом поле мы узнаём
 	// по мгновенно умершему процессу и невнятной ошибке в логе.
 	if err := a.manager.Check(cfg); err != nil {
-		return err
+		return codedErrf(ErrCoreCheck, "%w", err)
 	}
 	if err := a.manager.Start(cfg); err != nil {
 		return err
@@ -526,6 +591,72 @@ func (a *App) GetState() string {
 	return string(a.manager.State())
 }
 
+// Status — состояние соединения одним куском: то же, что прилетает в событии
+// core:state, но по запросу.
+type Status struct {
+	State string `json:"state"`
+	Since int64  `json:"since"` // начало сессии, unix ms (0 = не подключены)
+}
+
+// GetStatus нужен при первичной загрузке UI. Событие core:state приходит только
+// на смену состояния, поэтому окно, показанное из трея через час после старта (или
+// поднятое с --tun-autostart), без этого метода не знало бы, с какого момента
+// считать время сессии, и показывало бы нули на живом подключении.
+func (a *App) GetStatus() Status {
+	st := Status{State: string(core.StateStopped)}
+	if a.manager != nil {
+		st.State = string(a.manager.State())
+	}
+	st.Since = a.connectedAt.Load()
+	return st
+}
+
+// --- Язык интерфейса ---
+
+// currentLang возвращает выбранный язык, а если пользователь его не выбирал —
+// определённый по локали Windows.
+func (a *App) currentLang() string {
+	if a.settings != nil {
+		if l := normalizeLang(a.settings.Get().Lang); l != "" {
+			return l
+		}
+	}
+	return system.DefaultLang()
+}
+
+// normalizeLang приводит язык к поддерживаемому значению; "" = не задан.
+func normalizeLang(lang string) string {
+	switch strings.ToLower(lang) {
+	case "ru":
+		return "ru"
+	case "en":
+		return "en"
+	}
+	return ""
+}
+
+// GetLanguage возвращает текущий язык интерфейса (ru|en).
+func (a *App) GetLanguage() string { return a.currentLang() }
+
+// SetLanguage запоминает язык и сразу перетитровывает меню трея — оно живёт вне
+// фронтенда и само по себе на смену языка не отреагирует.
+func (a *App) SetLanguage(lang string) error {
+	l := normalizeLang(lang)
+	if l == "" {
+		return codedErrf(ErrLangUnknown, "неизвестный язык: %q", lang)
+	}
+	if a.settings != nil {
+		if err := a.settings.Update(func(s *settings.Settings) { s.Lang = l }); err != nil {
+			return err
+		}
+	}
+	applyTrayLang(l)
+	if a.manager != nil {
+		updateTrayMenu(string(a.manager.State())) // тултип тоже на новом языке
+	}
+	return nil
+}
+
 // GetLogs возвращает накопленный лог ядра.
 func (a *App) GetLogs() []string {
 	if a.manager == nil {
@@ -567,7 +698,7 @@ func (a *App) SetMode(mode string) error {
 	switch mode {
 	case config.ModeRule, config.ModeGlobal, config.ModeDirect:
 	default:
-		return fmt.Errorf("неизвестный режим: %q", mode)
+		return codedErrf(ErrModeUnknown, "неизвестный режим: %q", mode)
 	}
 	// Сначала живому ядру, потом на диск: откажи ядро — и сохранённый режим
 	// разошёлся бы с тем, по которому реально идёт трафик.
@@ -603,7 +734,7 @@ func (a *App) GetRouting() rules.Config {
 // одно, трафик идёт по-другому, и разобраться в этом пользователю нечем.
 func (a *App) withRouting(mutate func() error) error {
 	if a.rules == nil {
-		return fmt.Errorf("правила не готовы")
+		return codedErr(ErrNotReady, "правила не готовы")
 	}
 	prev := a.rules.Get() // глубокая копия — состояние до правки
 	if err := mutate(); err != nil {
@@ -718,7 +849,7 @@ func (a *App) applyRouting() error {
 	}
 	// Битый конфиг не должен ронять живое соединение: проверяем до перезапуска.
 	if err := a.manager.Check(cfg); err != nil {
-		return err
+		return codedErrf(ErrCoreCheck, "%w", err)
 	}
 	return a.manager.Restart(cfg)
 }
@@ -784,17 +915,17 @@ func (a *App) PickCoreFile() (string, error) {
 // встроенное). Возвращает строку версии выбранного ядра.
 func (a *App) SetCorePath(path string) (string, error) {
 	if a.manager == nil {
-		return "", fmt.Errorf("приложение не инициализировано")
+		return "", codedErr(ErrNotReady, "приложение не инициализировано")
 	}
 	if a.manager.State() == core.StateRunning || a.manager.State() == core.StateStarting {
-		return "", fmt.Errorf("сначала отключитесь — ядро нельзя менять на работающем подключении")
+		return "", codedErr(ErrCoreRunning, "сначала отключитесь — ядро нельзя менять на работающем подключении")
 	}
 
 	ver := ""
 	if path != "" {
 		v, err := coreVersion(path)
 		if err != nil {
-			return "", fmt.Errorf("файл не запускается как sing-box: %w", err)
+			return "", codedErrf(ErrCoreInvalid, "файл не запускается как sing-box: %w", err)
 		}
 		ver = v
 	}
@@ -867,7 +998,7 @@ func (a *App) ExternalIP() (IPInfo, error) {
 			return info, nil
 		}
 	}
-	return IPInfo{}, fmt.Errorf("не удалось определить внешний IP")
+	return IPInfo{}, codedErr(ErrIPUnknown, "не удалось определить внешний IP")
 }
 
 // geoIPAPI — ip-api.com (полное имя страны + код + город; HTTP, но без ключа).
@@ -943,15 +1074,18 @@ func (a *App) SetSubUpdateHours(hours int) error {
 
 // startSubScheduler раз в 30 минут проверяет подписки и обновляет те, что старше
 // заданного интервала. Так смена интервала не требует перезапуска планировщика.
+// Заодно тем же тиком докачиваются текстовые списки правил (.lst).
 func (a *App) startSubScheduler() {
 	// Первую проверку делаем вскоре после старта.
 	go func() {
 		time.Sleep(10 * time.Second)
 		a.autoRefreshSubs()
+		a.refreshListSets()
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			a.autoRefreshSubs()
+			a.refreshListSets()
 		}
 	}()
 }
@@ -997,7 +1131,7 @@ type ProxyNode struct {
 // GetProxies возвращает selector "proxy", выбранную ноду и её варианты с задержками.
 func (a *App) GetProxies() (*ProxiesView, error) {
 	if a.clash == nil {
-		return nil, fmt.Errorf("clash api не готов")
+		return nil, codedErr(ErrClashNotReady, "clash api не готов")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1008,7 +1142,7 @@ func (a *App) GetProxies() (*ProxiesView, error) {
 	}
 	sel, ok := proxies[config.ProxyTag]
 	if !ok {
-		return nil, fmt.Errorf("селектор %q не найден (нет активных нод?)", config.ProxyTag)
+		return nil, codedErrf(ErrNoSelector, "селектор %q не найден (нет активных нод?)", config.ProxyTag)
 	}
 	view := &ProxiesView{Selector: config.ProxyTag, Now: sel.Now}
 	for _, name := range sel.All {
@@ -1025,7 +1159,7 @@ func (a *App) GetProxies() (*ProxiesView, error) {
 // SelectNode переключает selector на выбранную ноду (без рестарта ядра).
 func (a *App) SelectNode(name string) error {
 	if a.clash == nil {
-		return fmt.Errorf("clash api не готов")
+		return codedErr(ErrClashNotReady, "clash api не готов")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1035,7 +1169,7 @@ func (a *App) SelectNode(name string) error {
 // TestDelay замеряет задержку одной ноды через ядро (мс).
 func (a *App) TestDelay(name string) (int, error) {
 	if a.clash == nil {
-		return 0, fmt.Errorf("clash api не готов")
+		return 0, codedErr(ErrClashNotReady, "clash api не готов")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()

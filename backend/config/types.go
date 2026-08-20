@@ -38,6 +38,9 @@ type Options struct {
 
 	BlockQUIC  bool   // резать QUIC/HTTP-3 в TUN (fallback на TCP; чинит Google/YouTube)
 	RuleSetDir string // каталог с .srs (обычно каталог ассетов)
+	// ListSetDir — каталог со списками .lst, сконвертированными в source-наборы
+	// (data\rulesets). Пусто = такие наборы в конфиг не попадут.
+	ListSetDir string
 
 	GeoIPPath   string // путь к geoip.db (для будущих правил)
 	GeoSitePath string // путь к geosite.db

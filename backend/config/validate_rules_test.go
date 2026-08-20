@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"Proxy/backend/rules"
@@ -108,7 +109,7 @@ func TestNewRuleFieldsValidate(t *testing.T) {
 			Values: []string{"quic"}, Action: rules.ActionBlock, Method: rules.RejectDrop}},
 		{"tls_fragment direct", rules.Rule{Enabled: true, Match: rules.MatchDomainSuffix,
 			Values: []string{"example.com"}, Action: rules.ActionDirect, TLSFragment: true}},
-		{"tls_fragment proxy", rules.Rule{Enabled: true, Match: rules.MatchDomainSuffix,
+		{"tls_fragment на прокси (флаг отбрасывается)", rules.Rule{Enabled: true, Match: rules.MatchDomainSuffix,
 			Values: []string{"example.com"}, Action: rules.ActionProxy, TLSFragment: true}},
 	}
 
@@ -221,4 +222,45 @@ func TestLogLevelsValidate(t *testing.T) {
 			Routing: rules.Default()})
 	}
 	t.Log("✅ уровни журнала trace…error приняты обоими ядрами")
+}
+
+// TestListRuleSetValidates — набор из текстового списка (.lst) уезжает в конфиг
+// локальным source-набором. Проверяем и то, что ядро принимает такой конфиг, и
+// то, что оно действительно матчит по нему домены: семантику domain_suffix
+// придумывать за ядро нельзя.
+func TestListRuleSetValidates(t *testing.T) {
+	dir := t.TempDir()
+	domains, suffixes := ParseDomainList([]byte(".ua\n4pda.ru\nabs.twimg.com\n"))
+	data, err := BuildSourceRuleSet(domains, suffixes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := ListSetPath(dir, "inside-raw")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	routing := rules.Config{Version: rules.Version, Final: rules.ActionDirect,
+		RuleSets: []rules.RuleSet{{ID: "1", Tag: "inside-raw", Type: rules.SetRemote,
+			URL: "https://example.com/inside-raw.lst", Format: rules.FormatList}},
+		Rules: []rules.Rule{{ID: "a", Enabled: true, Name: "Список — через прокси",
+			Match: rules.MatchRuleSet, Values: []string{"inside-raw"}, Action: rules.ActionProxy}}}
+
+	checkConfig(t, Options{Nodes: []Node{ruleTestNode(t)}, Routing: routing, ListSetDir: dir})
+
+	// А теперь спросим у ядра, что оно об этом наборе думает.
+	want := map[string]bool{
+		"4pda.ru": true, "www.4pda.ru": true, "foo.ua": true,
+		"x4pda.ru": false, "google.com": false,
+	}
+	for name, bin := range cores(t) {
+		for domain, expect := range want {
+			out, err := exec.Command(bin, "rule-set", "match", "--format", "source", path, domain).CombinedOutput()
+			got := err == nil && strings.Contains(string(out), "match rules.")
+			if got != expect {
+				t.Fatalf("%s: %s → совпадение %v, ожидалось %v\n%s", name, domain, got, expect, out)
+			}
+		}
+	}
+	t.Log("✅ набор из .lst принят обоими ядрами; поддомены ловятся, соседи по имени — нет")
 }

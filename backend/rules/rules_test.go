@@ -43,6 +43,8 @@ func TestRuleValidate(t *testing.T) {
 		{"drop только для блока", Rule{Match: MatchDomain, Values: []string{"ya.ru"}, Action: ActionDirect, Method: RejectDrop}, false},
 		{"drop для блока", Rule{Match: MatchProtocol, Values: []string{"quic"}, Action: ActionBlock, Method: RejectDrop}, true},
 		{"фрагмент не для блока", Rule{Match: MatchDomain, Values: []string{"ya.ru"}, Action: ActionBlock, TLSFragment: true}, false},
+		{"фрагмент не для прокси", Rule{Match: MatchDomain, Values: []string{"ya.ru"}, Action: ActionProxy, TLSFragment: true}, false},
+		{"фрагмент для direct", Rule{Match: MatchDomain, Values: []string{"ya.ru"}, Action: ActionDirect, TLSFragment: true}, true},
 		{"неизвестный протокол", Rule{Match: MatchProtocol, Values: []string{"gopher"}, Action: ActionBlock}, false},
 	}
 	for _, c := range cases {
@@ -291,5 +293,30 @@ func TestStoreCorruptedFile(t *testing.T) {
 	}
 	if string(bad) != "{это не json" {
 		t.Fatalf("в routing.json.bad не исходное содержимое: %q", bad)
+	}
+}
+
+// TestNormalizeDropsLegacyFragment — до 2.0.0 UI разрешал фрагментацию TLS и на
+// прокси-правилах. Такой флаг обязан гаситься при загрузке: иначе строгий
+// Validate уронил бы первое же сохранение правил на существующем routing.json.
+func TestNormalizeDropsLegacyFragment(t *testing.T) {
+	c := Config{
+		Version: Version, Final: ActionProxy,
+		Rules: []Rule{
+			{ID: "a", Enabled: true, Match: MatchDomain, Values: []string{"ya.ru"},
+				Action: ActionProxy, TLSFragment: true},
+			{ID: "b", Enabled: true, Match: MatchDomain, Values: []string{"vk.com"},
+				Action: ActionDirect, TLSFragment: true},
+		},
+	}
+	c.Normalize()
+	if c.Rules[0].TLSFragment {
+		t.Error("на прокси-правиле флаг фрагментации должен гаснуть")
+	}
+	if !c.Rules[1].TLSFragment {
+		t.Error("на direct-правиле флаг фрагментации должен сохраняться")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("нормализованный конфиг обязан проходить Validate: %v", err)
 	}
 }

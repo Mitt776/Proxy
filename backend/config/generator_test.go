@@ -374,6 +374,10 @@ func TestGenerateRuleFields(t *testing.T) {
 				if r["action"] != "route" || r["tls_fragment"] != true || r["outbound"] != DirectTag {
 					t.Fatalf("ожидался route+tls_fragment: %+v", r)
 				}
+				// Без явной паузы ядро берёт свои 500 мс на каждом соединении.
+				if r["tls_fragment_fallback_delay"] != tlsFragmentFallbackDelay {
+					t.Fatalf("ожидалась пауза %s: %+v", tlsFragmentFallbackDelay, r)
+				}
 			}},
 		{"регулярка по домену", rules.Rule{Enabled: true, Match: rules.MatchDomainRegex,
 			Values: []string{`^ads\..*\.com$`}, Action: rules.ActionBlock},

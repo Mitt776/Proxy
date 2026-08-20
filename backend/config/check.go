@@ -195,7 +195,29 @@ func matchDomainRules(opts Options, enabled []rules.Rule, domain string, match R
 func checkRuleSet(opts Options, r rules.Rule, domain string, match RuleSetMatcher) (string, string) {
 	var unknown []string
 	for _, tag := range rules.CleanValues(r.Match, r.Values) {
-		if set := opts.Routing.FindRuleSet(tag); set != nil && set.Type == rules.SetRemote {
+		set := opts.Routing.FindRuleSet(tag)
+		// Список .lst лежит у нас на диске сконвертированным — его, в отличие от
+		// настоящего remote-набора, ядро может проверить прямо сейчас.
+		if set != nil && set.IsList() {
+			if opts.ListSetDir == "" {
+				unknown = append(unknown, tag)
+				continue
+			}
+			path := ListSetPath(opts.ListSetDir, tag)
+			if _, err := os.Stat(path); err != nil {
+				continue // не скачан — в бою правило и не попадёт в конфиг
+			}
+			got, err := match(path, rules.FormatSource, domain)
+			if err != nil {
+				unknown = append(unknown, tag)
+				continue
+			}
+			if len(got) > 0 {
+				return CheckMatch, ""
+			}
+			continue
+		}
+		if set != nil && set.Type == rules.SetRemote {
 			unknown = append(unknown, tag)
 			continue
 		}

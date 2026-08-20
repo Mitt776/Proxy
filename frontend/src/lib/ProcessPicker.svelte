@@ -3,6 +3,9 @@
   // выбранные имена (chrome.exe) — именно они идут в правило.
   import { onMount, createEventDispatcher } from "svelte";
   import { ListProcesses } from "../../wailsjs/go/main/App";
+  import Icon from "./icons/Icon.svelte";
+  import { t } from "./i18n";
+  import { errText } from "./i18n/errors";
   import type { system } from "../../wailsjs/go/models";
 
   export let selected: string[] = [];
@@ -23,7 +26,7 @@
     try {
       all = await ListProcesses();
     } catch (e) {
-      err = String(e);
+      err = errText(e);
     } finally {
       loading = false;
     }
@@ -47,84 +50,83 @@
     : all;
 </script>
 
-<div class="overlay" role="button" tabindex="0"
+<div class="modal-backdrop" role="button" tabindex="0"
      on:click={() => dispatch("close")}
      on:keydown={(e) => e.key === "Escape" && dispatch("close")}>
-  <div class="box" role="dialog" on:click|stopPropagation on:keydown|stopPropagation>
-    <div class="head">
-      <span class="title">Запущенные процессы</span>
-      <button class="mini" title="Обновить список" on:click={reload}>⟳</button>
+  <div class="modal" role="dialog" on:click|stopPropagation on:keydown|stopPropagation>
+    <div class="modal-h">
+      {$t("picker.title")}
+      <span class="hbtns">
+        <button class="icon-btn" title={$t("common.refresh")} on:click={reload}>
+          <Icon name="refresh" size={15} />
+        </button>
+        <button class="icon-btn" title={$t("common.close")} on:click={() => dispatch("close")}>
+          <Icon name="close" size={15} />
+        </button>
+      </span>
     </div>
 
-    <input class="fld" placeholder="Поиск по имени…" bind:value={query} />
+    <div class="modal-b">
+      <input class="fld" placeholder={$t("picker.searchPh")} bind:value={query} />
 
-    {#if err}
-      <div class="error">{err}</div>
-    {:else if loading}
-      <div class="empty">Читаю список процессов…</div>
-    {:else}
-      <div class="list">
-        {#each shown as p (p.name)}
-          <div class="row" class:on={picked.has(p.name.toLowerCase())}
-               role="button" tabindex="0"
-               on:click={() => toggle(p.name)}
-               on:keydown={(e) => e.key === "Enter" && toggle(p.name)}>
-            <span class="mark">{picked.has(p.name.toLowerCase()) ? "☑" : "☐"}</span>
-            {#if p.icon}
-              <img class="icon" src={p.icon} alt="" />
-            {:else}
-              <span class="icon ph">▪</span>
-            {/if}
-            <span class="name">{p.name}</span>
-            <span class="path" title={p.path}>{p.path}</span>
-          </div>
-        {/each}
-        {#if shown.length === 0}
-          <div class="empty">Ничего не нашлось</div>
-        {/if}
-      </div>
-    {/if}
+      {#if err}
+        <div class="error">{err}</div>
+      {:else if loading}
+        <div class="empty">{$t("picker.loading")}</div>
+      {:else}
+        <div class="rows">
+          {#each shown as p (p.name)}
+            <div class="row-i proc" class:on={picked.has(p.name.toLowerCase())}
+                 role="button" tabindex="0"
+                 on:click={() => toggle(p.name)}
+                 on:keydown={(e) => e.key === "Enter" && toggle(p.name)}>
+              <span class="mark">
+                {#if picked.has(p.name.toLowerCase())}<Icon name="check" size={13} />{/if}
+              </span>
+              {#if p.icon}
+                <img class="ico" src={p.icon} alt="" />
+              {:else}
+                <span class="ico ph"><Icon name="folder" size={14} /></span>
+              {/if}
+              <span class="name">{p.name}</span>
+              <span class="path" title={p.path}>{p.path}</span>
+            </div>
+          {/each}
+          {#if shown.length === 0}
+            <div class="empty">{$t("picker.empty")}</div>
+          {/if}
+        </div>
+      {/if}
+    </div>
 
-    <div class="foot">
-      <span class="hint">Выбрано: {picked.size}</span>
-      <button class="mini wide" on:click={() => dispatch("close")}>Отмена</button>
-      <button class="btn add-btn small" on:click={apply}>Добавить в правило</button>
+    <div class="modal-f">
+      <button class="btn" on:click={() => dispatch("close")}>{$t("common.cancel")}</button>
+      <button class="btn primary" on:click={apply} disabled={picked.size === 0}>
+        {$t("picker.apply", { n: picked.size })}
+      </button>
     </div>
   </div>
 </div>
 
 <style>
-  .overlay {
-    position: fixed; inset: 0; z-index: 300; background: rgba(0, 0, 0, 0.65);
-    display: flex; align-items: center; justify-content: center;
-  }
-  .box {
-    background: var(--panel); border: 1px solid var(--line-2); border-radius: 12px;
-    padding: 16px; width: min(620px, 92vw); max-height: 80vh;
-    display: flex; flex-direction: column; gap: 10px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  }
-  .head { display: flex; align-items: center; justify-content: space-between; }
-  .title { font-size: 14px; font-weight: 700; }
-  .list {
-    flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
-    min-height: 120px;
-  }
-  .row {
-    display: flex; align-items: center; gap: 8px; padding: 5px 8px;
-    border: 1px solid transparent; border-radius: 7px; cursor: pointer; font-size: 13px;
-  }
-  .row:hover { background: var(--bg); }
-  .row.on { border-color: var(--accent); background: var(--accent-bg); }
-  .mark { color: var(--accent); width: 14px; flex: none; }
-  .icon { width: 18px; height: 18px; flex: none; object-fit: contain; }
-  .icon.ph { color: var(--muted-2); text-align: center; font-size: 12px; }
-  .name { font-weight: 700; flex: none; }
+  .modal { max-width: 640px; }
+  .hbtns { display: flex; gap: var(--s-1); }
+  .modal-b { display: flex; flex-direction: column; gap: var(--s-3); }
+  .rows { min-height: 160px; max-height: 46vh; }
+
+  .proc { padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  .proc.on { background: var(--accent-dim); }
+  .mark { width: 14px; flex: none; display: flex; color: var(--accent-2); }
+  .ico { width: 18px; height: 18px; flex: none; object-fit: contain; }
+  .ico.ph { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .name { font-weight: 600; flex: none; }
   .path {
-    color: var(--muted-2); font-size: 11px; margin-left: auto;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
+    color: var(--muted);
+    font-size: 11px;
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
   }
-  .foot { display: flex; align-items: center; gap: 8px; }
-  .foot .hint { margin-right: auto; }
-  .btn.small { padding: 6px 14px; font-size: 13px; }
 </style>

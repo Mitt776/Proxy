@@ -37,6 +37,9 @@ func main() {
 	var singleInstance *options.SingleInstanceLock
 	if !hasFlag(tunAutostartFlag) {
 		singleInstance = &options.SingleInstanceLock{
+			// Идентификатор намеренно остался с прежнего имени приложения: смена
+			// строки означает, что старая и новая версии не видят друг друга, и во
+			// время обновления на экране окажутся две копии сразу.
 			UniqueId:               "proxy-singbox-client-1f6a2b",
 			OnSecondInstanceLaunch: app.onSecondInstance,
 		}
@@ -44,13 +47,19 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "Proxy",
-		Width:  1024,
-		Height: 768,
+		Title:  "MitM",
+		Width:  1180,
+		Height: 760,
+		// Своя шапка окна (перетаскивание — через --wails-draggable в TitleBar.svelte).
+		Frameless: true,
+		MinWidth:  1000,
+		MinHeight: 660,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour:   &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		// Цвет обязан совпадать с токеном --bg фронтенда: между стартом WebView2 и
+		// первым кадром окно залито именно им, и расхождение видно вспышкой.
+		BackgroundColour:   &options.RGBA{R: 14, G: 10, B: 26, A: 1},
 		StartHidden:        startHidden,
 		SingleInstanceLock: singleInstance,
 		OnStartup:          app.startup,

@@ -20,6 +20,11 @@ const (
 const (
 	FormatBinary = "binary" // скомпилированный .srs
 	FormatSource = "source" // исходный JSON
+	// FormatList — наш формат, ядру не известный: обычный текстовый список
+	// доменов по одному в строке (*.lst из репозиториев антицензуры).
+	// Приложение качает такой список само, переводит в source-набор и кладёт
+	// в data\rulesets, а ядро видит уже готовый локальный набор.
+	FormatList = "lst"
 )
 
 // RuleSet — удалённый набор правил, на который можно сослаться из правила с
@@ -61,9 +66,13 @@ func (rs *RuleSet) Validate() error {
 		return fmt.Errorf("неизвестный тип набора %q", rs.Type)
 	}
 	switch rs.Format {
-	case "", FormatBinary, FormatSource:
+	case "", FormatBinary, FormatSource, FormatList:
 	default:
-		return fmt.Errorf("неизвестный формат %q (ожидался %q или %q)", rs.Format, FormatBinary, FormatSource)
+		return fmt.Errorf("неизвестный формат %q (ожидались %q, %q или %q)",
+			rs.Format, FormatBinary, FormatSource, FormatList)
+	}
+	if rs.Format == FormatList && rs.Type != SetRemote {
+		return fmt.Errorf("список %q качается по адресу — тип набора должен быть %q", tag, SetRemote)
 	}
 	switch rs.Detour {
 	case "", ActionDirect, ActionProxy:
@@ -83,6 +92,10 @@ func (rs *RuleSet) FormatOrDefault() string {
 	}
 	return FormatBinary
 }
+
+// IsList сообщает, что набор — текстовый список доменов, который приложение
+// качает и конвертирует само (ядро формат .lst не понимает).
+func (rs *RuleSet) IsList() bool { return rs.Format == FormatList }
 
 // UpdateInterval возвращает интервал обновления в виде строки sing-box ("24h").
 func (rs *RuleSet) UpdateInterval() string {

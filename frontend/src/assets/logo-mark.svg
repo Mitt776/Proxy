@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 128" width="144" height="128" role="img" aria-label="MitM">
+  <!-- Знак MitM: ладонь с буквой M посередине потока. Слева входит «грязный»
+       трафик (тёплые точки), справа выходит отфильтрованный (фиолетовые стрелки).
+       Геометрия чистая, без растровых эффектов: один и тот же файл идёт и в
+       заставку во весь экран, и в иконку exe/трея.
+
+       Все градиенты — userSpaceOnUse. С objectBoundingBox (по умолчанию) у
+       горизонтальной линии высота рамки равна нулю, градиент схлопывается, и
+       по спеке элемент просто не рисуется: провода и стрелки исчезали. -->
+  <defs>
+    <linearGradient id="mitmHand" gradientUnits="userSpaceOnUse" x1="20" y1="24" x2="91" y2="106">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="1" stop-color="#7C4DEF"/>
+    </linearGradient>
+    <linearGradient id="mitmIn" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="30" y2="0">
+      <stop offset="0" stop-color="#FB7185"/>
+      <stop offset="1" stop-color="#FBBF24"/>
+    </linearGradient>
+    <linearGradient id="mitmOut" gradientUnits="userSpaceOnUse" x1="96" y1="0" x2="122" y2="0">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#C4B5FD"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Входящий поток: три тёплые точки с «проводами» к ладони -->
+  <g class="mitm-in" fill="none" stroke="url(#mitmIn)" stroke-width="3" stroke-linecap="round">
+    <path d="M13 62h14"/>
+    <path d="M10 78h17"/>
+    <path d="M13 94h14"/>
+  </g>
+  <g class="mitm-in-dots" fill="url(#mitmIn)">
+    <circle cx="8" cy="62" r="3.2"/>
+    <circle cx="5" cy="78" r="3.2"/>
+    <circle cx="8" cy="94" r="3.2"/>
+  </g>
+
+  <!-- Рука и стрелки сдвинуты вправо целиком: так входящему потоку слева хватает
+       места, а координаты внутри группы остаются теми же, что в logo-glyph.svg. -->
+  <g transform="translate(12 0)">
+    <!-- Ладонь: пальцы отдельными скруглёнными планками, чтобы силуэт читался
+         даже в 22 пикселя, где внутренние разделительные линии пропадают.
+         Большой палец кладём ПОВЕРХ ладони: под ней между ними оставался
+         предательский зазор в доли пикселя, а сверху шва не видно — градиент
+         userSpaceOnUse даёт обеим фигурам один и тот же цвет в точке стыка. -->
+    <g fill="url(#mitmHand)">
+      <rect x="40" y="36" width="10" height="46" rx="5" opacity=".78"/>
+      <rect x="53" y="24" width="10" height="58" rx="5"/>
+      <rect x="66" y="27" width="10" height="55" rx="5" opacity=".9"/>
+      <rect x="79" y="38" width="10" height="44" rx="5" opacity=".72"/>
+      <path d="M38 62h53v24a20 20 0 0 1-20 20H58a20 20 0 0 1-20-20z"/>
+      <path d="M50 94L27 80" fill="none" stroke="url(#mitmHand)" stroke-width="14" stroke-linecap="round"/>
+    </g>
+
+    <!-- Буква M — узнаваемая часть знака -->
+    <g fill="none" stroke="#F5F3FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M51 97V73l13 17 13-17v24"/>
+    </g>
+
+    <!-- Исходящий поток: очищенный трафик -->
+    <g class="mitm-out" fill="none" stroke="url(#mitmOut)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M96 62h16"/><path d="M107 57l5 5-5 5"/>
+      <path d="M96 78h22"/><path d="M113 73l5 5-5 5"/>
+      <path d="M96 94h16"/><path d="M107 89l5 5-5 5"/>
+    </g>
+  </g>
+</svg>

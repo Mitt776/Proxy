@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Вкладка соединений: что прямо сейчас идёт через ядро, каким маршрутом и по
+  // Вкладка трафика: что прямо сейчас идёт через ядро, каким маршрутом и по
   // какому правилу. Отсюда же можно оборвать соединение или сделать правило для
   // хоста/процесса, не выискивая его руками в списке правил.
   import { onMount, onDestroy } from "svelte";
@@ -7,7 +7,11 @@
     GetConnections, CloseConnection, CloseAllConnections, GetRouting, AddRule,
   } from "../../wailsjs/go/main/App";
   import RuleEditor from "./RuleEditor.svelte";
+  import Icon from "./icons/Icon.svelte";
+  import TabHead from "./shell/TabHead.svelte";
   import { connected, reportError, showToast, fmtBytes } from "./store";
+  import { t, tr, lang } from "./i18n";
+  import { errText } from "./i18n/errors";
   import type { main, rules } from "../../wailsjs/go/models";
 
   let rows: main.ConnectionRow[] = [];
@@ -38,7 +42,7 @@
       rows = await GetConnections();
       loadError = "";
     } catch (e) {
-      loadError = String(e);
+      loadError = errText(e);
     }
   }
 
@@ -69,7 +73,7 @@
     try {
       await CloseAllConnections();
       rows = [];
-      showToast("Соединения оборваны");
+      showToast(tr("traffic.closed"));
     } catch (e) {
       reportError(e);
     }
@@ -112,17 +116,19 @@
     editing = null;
     try {
       await AddRule(r);
-      showToast("Правило добавлено — применено к ядру");
+      showToast(tr("traffic.ruleAdded"));
     } catch (err) {
       reportError(err);
     }
   }
 
-  function fmtAge(sec: number): string {
-    if (sec < 60) return sec + " с";
-    if (sec < 3600) return Math.floor(sec / 60) + " мин";
-    return Math.floor(sec / 3600) + " ч";
-  }
+  // Возраст соединения — короткой формой, единицы зависят от языка.
+  $: fmtAge = (sec: number): string => {
+    const ru = $lang === "ru";
+    if (sec < 60) return sec + (ru ? " с" : "s");
+    if (sec < 3600) return Math.floor(sec / 60) + (ru ? " мин" : "m");
+    return Math.floor(sec / 3600) + (ru ? " ч" : "h");
+  };
 
   // Куда ушёл трафик: direct/block видно по тегу outbound-а, всё прочее — прокси.
   function outClass(out: string): string {
@@ -133,73 +139,79 @@
   }
 </script>
 
-<div class="wrap">
-  <div class="head">
-    <span class="panel-h">Соединения{rows.length ? ` (${rows.length})` : ""}</span>
-    <div class="tools">
-      <label class="check">
-        <input type="checkbox" bind:checked={paused} />
-        Пауза
-      </label>
-      <button class="mini wide" on:click={load} disabled={!$connected}>⟳</button>
-      <button class="mini wide danger" on:click={closeAll} disabled={!$connected || !rows.length}>
-        Оборвать все
-      </button>
-    </div>
-  </div>
+<div class="tab-wrap">
+  <TabHead title={$t("tab.traffic")} sub={$t("traffic.subtitle")}>
+    {#if rows.length}<span class="pill accent">{rows.length}</span>{/if}
+    <label class="check">
+      <input type="checkbox" bind:checked={paused} />
+      {$t("traffic.pause")}
+    </label>
+    <button class="icon-btn" title={$t("common.refresh")} on:click={load} disabled={!$connected}>
+      <Icon name="refresh" size={14} />
+    </button>
+    <button class="btn sm danger" on:click={closeAll} disabled={!$connected || !rows.length}>
+      {$t("traffic.closeAll")}
+    </button>
+  </TabHead>
 
   <div class="bar">
-    <input class="fld" placeholder="Фильтр: домен, процесс, правило…" bind:value={filter} />
+    <span class="sico"><Icon name="search" size={15} /></span>
+    <input class="fld" placeholder={$t("traffic.filterPh")} bind:value={filter} />
     <select class="fld sort" bind:value={sortBy}>
-      <option value="age">новые сверху</option>
-      <option value="traffic">по трафику</option>
-      <option value="host">по имени</option>
+      <option value="age">{$t("traffic.sort.age")}</option>
+      <option value="traffic">{$t("traffic.sort.traffic")}</option>
+      <option value="host">{$t("traffic.sort.host")}</option>
     </select>
   </div>
 
   {#if !$connected}
-    <div class="empty">Ядро не запущено — соединений нет.</div>
+    <div class="panel none"><Icon name="activity" size={28} />{$t("traffic.offline")}</div>
   {:else if loadError}
     <div class="error">{loadError}</div>
   {:else if view.length === 0}
-    <div class="empty">
-      {rows.length ? "Под фильтр ничего не подходит." : "Пока тихо. Открой сайт — соединения появятся здесь."}
+    <div class="panel none">
+      <Icon name="activity" size={28} />
+      {rows.length ? $t("traffic.noMatch") : $t("traffic.quiet")}
     </div>
   {:else}
-    <div class="list">
+    <div class="rows">
       {#each view as r (r.id)}
-        <div class="conn">
+        <div class="row-i conn">
           <div class="body">
-            <div class="line1">
+            <div class="l1">
               <span class="host" title={r.destIP ? `${r.destIP}:${r.port}` : r.host}>
                 {r.host || r.destIP || "?"}{r.port ? ":" + r.port : ""}
               </span>
               <span class="net">{r.network}</span>
               {#if r.process}
-                <button class="proc" title="Правило для этой программы"
+                <button class="proc" title={$t("traffic.procRule")}
                         on:click={() => ruleFromProcess(r)}>{r.process}</button>
               {/if}
             </div>
-            <div class="line2">
+            <div class="l2">
               <span class="out {outClass(r.outbound)}">{r.chain || r.outbound || "—"}</span>
-              <span class="rule" title="Правило, которое сработало в ядре">
-                {r.rule || "по умолчанию"}
-              </span>
-              <span class="traf">↓{fmtBytes(r.download)} ↑{fmtBytes(r.upload)}</span>
-              <span class="age">{fmtAge(r.seconds)}</span>
+              <span class="rule" title={$t("traffic.ruleHint")}>{r.rule || $t("traffic.byDefault")}</span>
             </div>
           </div>
-          <button class="mini" title="Сделать правило" on:click={() => ruleFrom(r)}>＋</button>
-          <button class="mini danger" title="Оборвать" on:click={() => closeOne(r)}>✕</button>
+
+          <span class="traf tnum">
+            <span class="dn">↓{$fmtBytes(r.download)}</span>
+            <span class="up">↑{$fmtBytes(r.upload)}</span>
+          </span>
+          <span class="age tnum">{fmtAge(r.seconds)}</span>
+
+          <button class="icon-btn" title={$t("traffic.makeRule")} on:click={() => ruleFrom(r)}>
+            <Icon name="plus" size={14} />
+          </button>
+          <button class="icon-btn danger" title={$t("traffic.close")} on:click={() => closeOne(r)}>
+            <Icon name="close" size={14} />
+          </button>
         </div>
       {/each}
     </div>
   {/if}
 
-  <div class="hint">
-    Имя программы ядро определяет только для соединений, попавших под правило по
-    процессу, — у остальных колонка пуста.
-  </div>
+  <div class="hint">{$t("traffic.procHint")}</div>
 </div>
 
 {#if editing}
@@ -207,42 +219,68 @@
 {/if}
 
 <style>
-  .wrap { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
-  .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .head .panel-h { margin: 0; }
-  .tools { display: flex; align-items: center; gap: 8px; }
-
-  .bar { display: flex; gap: 6px; }
-  .bar .fld { flex: 1; min-width: 0; }
-  .sort { flex: none; width: 140px; }
-
-  .list { flex: 1; min-height: 60px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-  .conn {
-    display: flex; align-items: center; gap: 6px; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px;
+  .bar { display: flex; align-items: center; gap: var(--s-2); flex: none; position: relative; }
+  .sico {
+    position: absolute;
+    left: 11px;
+    display: flex;
+    color: var(--muted);
+    pointer-events: none;
   }
-  .body { flex: 1; min-width: 0; text-align: left; }
-  .line1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .bar .fld { flex: 1; min-width: 0; padding-left: 34px; }
+  /* Селектору нужна та же вложенность, что и правилу выше, иначе flex: 1
+     перебивает фиксированную ширину и сортировка растягивается на пол-экрана. */
+  .bar .sort { flex: none; width: 180px; padding-left: 12px; }
+
+  .none {
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-3);
+    padding: var(--s-6);
+    color: var(--muted);
+    font-size: 13px;
+    flex: 1;
+  }
+
+  .conn { padding: 8px 14px; }
+  .body { flex: 1; min-width: 0; }
+  .l1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
   .host {
-    font-size: 12.5px; font-weight: 700; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .net { font-size: 10px; color: var(--muted-2); text-transform: uppercase; flex: none; }
+  .net { font-size: 9.5px; color: var(--muted); text-transform: uppercase; flex: none; letter-spacing: 0.05em; }
   .proc {
-    font-size: 10.5px; color: var(--text-2); background: var(--line); border: 0;
-    border-radius: 999px; padding: 1px 8px; cursor: pointer; font-family: inherit;
-    max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none;
+    font-size: 10.5px;
+    color: var(--text-2);
+    background: var(--line);
+    border: 0;
+    border-radius: var(--r-pill);
+    padding: 1px 8px;
+    cursor: pointer;
+    font-family: inherit;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: none;
   }
-  .proc:hover { background: var(--line-2); }
-  .line2 {
-    display: flex; align-items: center; gap: 8px; font-size: 11px;
-    color: var(--muted); margin-top: 2px; min-width: 0;
-  }
+  .proc:hover { background: var(--accent-dim); color: var(--accent-2); }
+
+  .l2 { display: flex; align-items: center; gap: var(--s-2); font-size: 11px; color: var(--muted); margin-top: 2px; min-width: 0; }
   .out { font-weight: 700; flex: none; }
-  .out.proxy { color: #58a6ff; }
-  .out.direct { color: var(--green); }
-  .out.block { color: var(--red); }
+  .out.proxy { color: var(--accent-2); }
+  .out.direct { color: var(--ok); }
+  .out.block { color: var(--danger); }
   .rule { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .traf { margin-left: auto; font-variant-numeric: tabular-nums; flex: none; }
-  .age { flex: none; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+
+  /* Колонки трафика и возраста фиксированной ширины: иначе строки «дышат» на
+     каждом опросе и список невозможно читать. */
+  .traf { flex: none; width: 132px; display: flex; justify-content: flex-end; gap: var(--s-2); font-size: 11px; }
+  .dn { color: var(--text-2); }
+  .up { color: var(--muted); }
+  .age { flex: none; width: 46px; text-align: right; font-size: 11px; color: var(--muted); }
 </style>

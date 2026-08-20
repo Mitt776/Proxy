@@ -71,7 +71,9 @@ type Rule struct {
 	// Method — способ отказа для ActionBlock (см. Reject*).
 	Method string `json:"method,omitempty"`
 	// TLSFragment — резать TLS ClientHello на фрагменты для этого правила
-	// (обход DPI по SNI). Совместимо только с ActionDirect/ActionProxy.
+	// (обход DPI по SNI). Только с ActionDirect: ядро режет полезную нагрузку,
+	// которую пишет в outbound, поэтому у прокси-правила разрез остаётся внутри
+	// туннеля и до провайдера не доезжает — см. config/route.go.
 	TLSFragment bool `json:"tlsFragment,omitempty"`
 
 	// Builtin — правило создано миграцией или дефолтами. Удалять из UI нельзя
@@ -230,6 +232,9 @@ func (r *Rule) Validate() error {
 	} else if r.Method != "" {
 		return fmt.Errorf("способ отказа применим только к блокировке")
 	}
+	if r.TLSFragment && r.Action != ActionDirect {
+		return fmt.Errorf("фрагментация TLS работает только с действием «напрямую»")
+	}
 
 	if r.Match == MatchPrivate {
 		return nil // матчер без значений
@@ -333,6 +338,13 @@ func (c *Config) Normalize() {
 		}
 		if r.Action != ActionBlock {
 			r.Method = ""
+		}
+		if r.Action != ActionDirect {
+			// Флаг мог остаться в старом routing.json: до 2.0.0 UI разрешал
+			// фрагментацию и на прокси-правилах, где она только добавляла
+			// задержку. Гасим здесь, иначе строгий Validate уронил бы первое же
+			// сохранение правил.
+			r.TLSFragment = false
 		}
 		out = append(out, r)
 	}

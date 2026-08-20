@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Иконка exe/трея/панели задач. Знак кладём на тёмную подложку: сам по себе
+       он фиолетовый, и на фиолетовой панели задач или в светлой теме прозрачный
+       вариант расплывается. Подложка даёт плотный силуэт при любом фоне. -->
+  <defs>
+    <linearGradient id="iconBg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="512">
+      <stop offset="0" stop-color="#2A2050"/>
+      <stop offset="1" stop-color="#120D22"/>
+    </linearGradient>
+    <linearGradient id="iconHand" gradientUnits="userSpaceOnUse" x1="20" y1="24" x2="91" y2="106">
+      <stop offset="0" stop-color="#DDD6FE"/>
+      <stop offset="1" stop-color="#7C4DEF"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#iconBg)"/>
+  <rect x="6" y="6" width="500" height="500" rx="106" fill="none" stroke="#4B3D86" stroke-width="4" opacity=".7"/>
+  <g transform="translate(28.5 -10.4) scale(4.1)">
+    <g fill="url(#iconHand)">
+      <rect x="40" y="36" width="10" height="46" rx="5" opacity=".78"/>
+      <rect x="53" y="24" width="10" height="58" rx="5"/>
+      <rect x="66" y="27" width="10" height="55" rx="5" opacity=".9"/>
+      <rect x="79" y="38" width="10" height="44" rx="5" opacity=".72"/>
+      <path d="M38 62h53v24a20 20 0 0 1-20 20H58a20 20 0 0 1-20-20z"/>
+      <path d="M50 94L27 80" fill="none" stroke="url(#iconHand)" stroke-width="14" stroke-linecap="round"/>
+    </g>
+    <g fill="none" stroke="#F5F3FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M51 97V73l13 17 13-17v24"/>
+    </g>
+  </g>
+</svg>

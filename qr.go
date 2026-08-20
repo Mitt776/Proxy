@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/base64"
-	"fmt"
 	"image"
 	_ "image/jpeg" // регистрируем декодеры для image.Decode
 	_ "image/png"
@@ -21,21 +20,21 @@ import (
 // ноды на телефон. Для подписки кодируем её URL, иначе — первую ссылку профиля.
 func (a *App) ProfileQR(id string) (string, error) {
 	if a.store == nil {
-		return "", fmt.Errorf("хранилище не готово")
+		return "", codedErr(ErrNotReady, "хранилище не готово")
 	}
 	p := a.store.Get(id)
 	if p == nil {
-		return "", fmt.Errorf("профиль не найден")
+		return "", codedErr(ErrProfileNotFound, "профиль не найден")
 	}
 
 	text := qrPayload(p)
 	if text == "" {
-		return "", fmt.Errorf("нечего кодировать в QR")
+		return "", codedErr(ErrQRNothing, "нечего кодировать в QR")
 	}
 
 	png, err := qrgen.Encode(text, qrgen.Medium, 320)
 	if err != nil {
-		return "", fmt.Errorf("не удалось сгенерировать QR: %w", err)
+		return "", codedErrf(ErrQRGenerate, "не удалось сгенерировать QR: %w", err)
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
 }
@@ -57,7 +56,7 @@ func qrPayload(p *profile.Profile) string {
 // создаёт профиль из считанной ссылки.
 func (a *App) ImportQRImage() (*profile.Profile, error) {
 	if a.store == nil {
-		return nil, fmt.Errorf("хранилище не готово")
+		return nil, codedErr(ErrNotReady, "хранилище не готово")
 	}
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Выберите картинку с QR-кодом",
@@ -89,7 +88,7 @@ func decodeQRFile(path string) (string, error) {
 
 	img, _, err := image.Decode(f)
 	if err != nil {
-		return "", fmt.Errorf("не удалось прочитать картинку: %w", err)
+		return "", codedErrf(ErrQRImage, "не удалось прочитать картинку: %w", err)
 	}
 	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
@@ -97,7 +96,7 @@ func decodeQRFile(path string) (string, error) {
 	}
 	res, err := qrcode.NewQRCodeReader().Decode(bmp, nil)
 	if err != nil {
-		return "", fmt.Errorf("QR-код на картинке не найден: %w", err)
+		return "", codedErrf(ErrQRNotFound, "QR-код на картинке не найден: %w", err)
 	}
 	return res.GetText(), nil
 }

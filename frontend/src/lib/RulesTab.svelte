@@ -1,16 +1,21 @@
 <script lang="ts">
-  // Вкладка маршрутизации: режим, упорядоченный список правил и группы нод.
-  // Порядок правил = приоритет, поэтому список перетаскиваемый.
+  // Вкладка маршрутизации: режим, упорядоченный список правил и «остальной
+  // трафик». Порядок правил = приоритет, поэтому список перетаскиваемый.
+  // Группы нод, удалённые наборы и проверка домена нужны редко — они за
+  // кнопками в шапке, чтобы главный список ничем не перебивался.
   import { onMount } from "svelte";
   import {
     GetRouting, AddRule, UpdateRule, DeleteRule, MoveRule, SetRuleEnabled,
     SetRoutingFinal, AddGroup, UpdateGroup, DeleteGroup, GetMode, SetMode,
-    AddRuleSet, UpdateRuleSet, DeleteRuleSet,
+    AddRuleSet, UpdateRuleSet, DeleteRuleSet, RefreshRuleSet,
   } from "../../wailsjs/go/main/App";
   import { EventsOn } from "../../wailsjs/runtime/runtime";
   import RuleEditor from "./RuleEditor.svelte";
   import DomainCheck from "./DomainCheck.svelte";
+  import Icon from "./icons/Icon.svelte";
+  import TabHead from "./shell/TabHead.svelte";
   import { reportError, showToast } from "./store";
+  import { t, tr } from "./i18n";
   import type { rules } from "../../wailsjs/go/models";
 
   let cfg: rules.Config = { version: 1, rules: [], groups: [], final: "proxy" } as rules.Config;
@@ -18,21 +23,17 @@
   let editing: rules.Rule | null = null;
   let dragID = "";
 
-  // Группы редактируются прямо в списке — форма на четыре поля не стоит модалки.
-  let newGroup: rules.Group | null = null;
-  // Удалённые наборы правил — там же: тег, адрес и как часто обновлять.
-  let newSet: rules.RuleSet | null = null;
+  let showCheck = false;
+  let showGroups = false;
   let showSets = false;
 
-  const matchLabels: Record<string, string> = {
-    domainSuffix: "домен+поддомены", domain: "домен", domainKeyword: "часть домена",
-    domainRegex: "регулярка", ipCIDR: "IP/подсеть", port: "порт",
-    process: "процесс", processPath: "путь к программе", ruleSet: "набор",
-    private: "приватные сети", protocol: "протокол", network: "тип трафика",
-  };
-  const actionLabels: Record<string, string> = {
-    proxy: "через прокси", direct: "напрямую", block: "блок",
-  };
+  // Группы и наборы правятся прямо в своих модалках — форма на четыре поля не
+  // стоит ещё одного уровня вложенности.
+  let newGroup: rules.Group | null = null;
+  let newSet: rules.RuleSet | null = null;
+  let refreshing = "";
+
+  const MODES = ["Rule", "Global", "Direct"];
 
   onMount(async () => {
     await reload();
@@ -62,9 +63,9 @@
   }
 
   const changeMode = (m: string) => run(() => SetMode(m));
-  const changeFinal = (f: string) => run(() => SetRoutingFinal(f), "Поведение по умолчанию изменено");
+  const changeFinal = (f: string) => run(() => SetRoutingFinal(f), tr("routing.finalSaved"));
   const toggleRule = (r: rules.Rule) => run(() => SetRuleEnabled(r.id, !r.enabled));
-  const removeRule = (r: rules.Rule) => run(() => DeleteRule(r.id), "Правило удалено");
+  const removeRule = (r: rules.Rule) => run(() => DeleteRule(r.id), tr("routing.ruleDeleted"));
 
   function newRule() {
     editing = {
@@ -76,7 +77,7 @@
   async function saveRule(e: CustomEvent<rules.Rule>) {
     const r = e.detail;
     editing = null;
-    await run(() => (r.id ? UpdateRule(r) : AddRule(r)), "Правило сохранено");
+    await run(() => (r.id ? UpdateRule(r) : AddRule(r)), tr("routing.ruleSaved"));
   }
 
   // --- перетаскивание ---
@@ -94,177 +95,278 @@
   }
   async function saveGroup(g: rules.Group) {
     newGroup = null;
-    await run(() => (g.id ? UpdateGroup(g) : AddGroup(g)), "Группа сохранена");
+    await run(() => (g.id ? UpdateGroup(g) : AddGroup(g)), tr("routing.groupSaved"));
   }
-  const removeGroup = (g: rules.Group) => run(() => DeleteGroup(g.id), "Группа удалена");
+  const removeGroup = (g: rules.Group) => run(() => DeleteGroup(g.id), tr("routing.groupDeleted"));
 
   // --- удалённые наборы правил ---
   function addSetDraft() {
-    showSets = true;
-    newSet = { id: "", tag: "", type: "remote", url: "", format: "binary", updateHours: 24, detour: "direct" } as rules.RuleSet;
+    newSet = {
+      id: "", tag: "", type: "remote", url: "", format: "binary",
+      updateHours: 24, detour: "direct",
+    } as rules.RuleSet;
   }
   async function saveSet(s: rules.RuleSet) {
     newSet = null;
-    await run(() => (s.id ? UpdateRuleSet(s) : AddRuleSet(s)), "Набор сохранён");
+    await run(() => (s.id ? UpdateRuleSet(s) : AddRuleSet(s)), tr("routing.setSaved"));
   }
-  const removeSet = (s: rules.RuleSet) => run(() => DeleteRuleSet(s.id), "Набор удалён");
+  const removeSet = (s: rules.RuleSet) => run(() => DeleteRuleSet(s.id), tr("routing.setDeleted"));
 
-  function ruleSummary(r: rules.Rule): string {
-    if (r.match === "private") return "локальная сеть и роутер";
-    const v = r.values || [];
-    return v.length > 3 ? `${v.slice(0, 3).join(", ")} и ещё ${v.length - 3}` : v.join(", ");
+  // Ручное обновление списка: набор из .lst качает и конвертирует приложение,
+  // и без кнопки пришлось бы ждать получасового тика планировщика.
+  async function refreshSet(s: rules.RuleSet) {
+    if (refreshing) return;
+    refreshing = s.id;
+    try {
+      const n = await RefreshRuleSet(s.id);
+      showToast(tr("routing.setRefreshed", { tag: s.tag, n }));
+    } catch (e) {
+      reportError(e);
+    } finally {
+      refreshing = "";
+    }
   }
+
+  // Имена встроенных правил приходят из Go по-русски (их пишет rules.Defaults).
+  // Переводим по самому имени: своих идентификаторов у них нет, а переименованное
+  // пользователем правило просто не найдётся в таблице и останется как есть.
+  const BUILTIN_NAMES: Record<string, string> = {
+    "Блокировка рекламы": "builtin.ads",
+    "Приватные сети (LAN, роутер)": "builtin.private",
+    "Россия — напрямую": "builtin.ru",
+  };
+
+  // Обе функции читают $t, а не tr: иначе список, отрисованный до того, как язык
+  // приехал из Go, так и остался бы на языке первого кадра.
+  $: ruleTitle = (r: rules.Rule): string => {
+    if (r.builtin && BUILTIN_NAMES[r.name]) return $t(BUILTIN_NAMES[r.name]);
+    return r.name || $t("match." + r.match);
+  };
+
+  $: ruleSummary = (r: rules.Rule): string => {
+    if (r.match === "private") return $t("routing.private");
+    const v = r.values || [];
+    if (v.length > 3) {
+      return v.slice(0, 3).join(", ") + " " + $t("routing.andMore", { n: v.length - 3 });
+    }
+    return v.join(", ");
+  };
 </script>
 
-<div class="wrap">
-  <div class="modes">
-    <span class="lbl">Режим:</span>
-    {#each [["Rule", "По правилам"], ["Global", "Всё через прокси"], ["Direct", "Всё напрямую"]] as [id, label]}
-      <button class="tab" class:on={mode === id} on:click={() => changeMode(id)}>{label}</button>
-    {/each}
-    <span class="hint mode-hint">
-      {mode === "Rule" ? "Работает список ниже" : "Список правил временно игнорируется"}
-    </span>
+<div class="tab-wrap">
+  <TabHead title={$t("tab.routing")} sub={$t("routing.subtitle")}>
+    <button class="btn ghost sm" on:click={() => (showCheck = true)}>
+      <Icon name="search" size={14} />{$t("check.title")}
+    </button>
+    <button class="btn ghost sm" on:click={() => (showGroups = true)}>
+      <Icon name="layers" size={14} />{$t("routing.groups")}
+      {#if cfg.groups?.length}<span class="cnt">{cfg.groups.length}</span>{/if}
+    </button>
+    <button class="btn ghost sm" on:click={() => (showSets = true)}>
+      <Icon name="shield" size={14} />{$t("routing.sets")}
+      {#if cfg.ruleSets?.length}<span class="cnt">{cfg.ruleSets.length}</span>{/if}
+    </button>
+    <button class="btn primary" on:click={newRule}>
+      <Icon name="plus" size={15} />{$t("routing.addRule")}
+    </button>
+  </TabHead>
+
+  <div class="modebar">
+    <div class="segmented">
+      {#each MODES as m}
+        <button class:on={mode === m} title={$t("mode." + m + ".hint")}
+                on:click={() => changeMode(m)}>{$t("mode." + m + ".long")}</button>
+      {/each}
+    </div>
+    <span class="hint">{mode === "Rule" ? $t("routing.modeHint.on") : $t("routing.modeHint.off")}</span>
   </div>
 
-  <DomainCheck />
-
-  <div class="head">
-    <span class="panel-h">Правила — сверху вниз, срабатывает первое подходящее</span>
-    <button class="mini wide" on:click={newRule}>+ Правило</button>
-  </div>
-
-  <div class="list" class:off={mode !== "Rule"}>
+  <div class="rows" class:off={mode !== "Rule"}>
     {#each cfg.rules as r (r.id)}
-      <div class="rule" class:disabled={!r.enabled}
+      <div class="row-i rule" class:disabled={!r.enabled}
            draggable="true"
            on:dragstart={() => (dragID = r.id)}
            on:dragover|preventDefault
            on:drop|preventDefault={() => onDrop(r)}>
-        <span class="grip" title="Перетащи, чтобы изменить приоритет">⋮⋮</span>
-        <input type="checkbox" checked={r.enabled} on:change={() => toggleRule(r)} />
+        <span class="grip" title={$t("routing.dragHint")}><Icon name="drag" size={14} /></span>
+        <label class="check">
+          <input type="checkbox" checked={r.enabled} on:change={() => toggleRule(r)} />
+        </label>
         <div class="body">
           <div class="name">
-            {r.name || matchLabels[r.match] || r.match}
-            {#if r.builtin}<span class="tag">встроенное</span>{/if}
-            {#if r.tlsFragment}<span class="tag frag">фрагментация</span>{/if}
+            {ruleTitle(r)}
+            {#if r.builtin}<span class="pill">{$t("routing.builtin")}</span>{/if}
+            {#if r.tlsFragment}<span class="pill warn">{$t("routing.frag")}</span>{/if}
           </div>
-          <div class="meta">
-            {matchLabels[r.match] || r.match}: {ruleSummary(r)}
-          </div>
+          <div class="meta">{$t("match." + r.match)}: {ruleSummary(r)}</div>
         </div>
         <span class="act {r.action}">
-          {actionLabels[r.action] || r.action}{r.target ? " → " + r.target : ""}
+          {$t("action." + r.action)}{r.target ? " → " + r.target : ""}
         </span>
-        <button class="mini" title="Изменить" on:click={() => (editing = r)}>✎</button>
-        <button class="mini danger" title="Удалить" disabled={r.builtin}
-                on:click={() => removeRule(r)}>✕</button>
+        <button class="icon-btn" title={$t("common.edit")} on:click={() => (editing = r)}>
+          <Icon name="edit" size={14} />
+        </button>
+        <button class="icon-btn danger" title={$t("common.delete")} disabled={r.builtin}
+                on:click={() => removeRule(r)}>
+          <Icon name="trash" size={14} />
+        </button>
       </div>
     {/each}
     {#if cfg.rules.length === 0}
-      <div class="empty">Правил нет — весь трафик идёт по умолчанию.</div>
+      <div class="empty">{$t("routing.empty")}</div>
     {/if}
   </div>
 
-  <label class="final">
-    Остальной трафик:
-    <select class="fld" value={cfg.final} on:change={(e) => changeFinal(e.currentTarget.value)}>
-      <option value="proxy">через прокси</option>
-      <option value="direct">напрямую</option>
-    </select>
-  </label>
-
-  <div class="head">
-    <span class="panel-h">Группы нод</span>
-    <button class="mini wide" on:click={addGroupDraft}>+ Группа</button>
-  </div>
-
-  <div class="groups">
-    {#each cfg.groups as g (g.id)}
-      <div class="group">
-        <input class="fld gname" bind:value={g.name} on:change={() => saveGroup(g)} />
-        <select class="fld" bind:value={g.type} on:change={() => saveGroup(g)}>
-          <option value="urltest">по задержке</option>
-          <option value="select">ручной выбор</option>
-        </select>
-        <input class="fld gfilter" bind:value={g.filter} on:change={() => saveGroup(g)}
-               placeholder="фильтр по имени ноды, напр. ^NL" />
-        <button class="mini danger" title="Удалить группу" on:click={() => removeGroup(g)}>✕</button>
-      </div>
-    {/each}
-
-    {#if newGroup}
-      <div class="group">
-        <input class="fld gname" bind:value={newGroup.name} placeholder="Название" />
-        <select class="fld" bind:value={newGroup.type}>
-          <option value="urltest">по задержке</option>
-          <option value="select">ручной выбор</option>
-        </select>
-        <input class="fld gfilter" bind:value={newGroup.filter} placeholder="^NL" />
-        <button class="mini" title="Сохранить" on:click={() => saveGroup(newGroup)}>✓</button>
-        <button class="mini danger" title="Отмена" on:click={() => (newGroup = null)}>✕</button>
-      </div>
-    {/if}
-
-    {#if cfg.groups.length === 0 && !newGroup}
-      <div class="hint">
-        Группа собирает ноды по фильтру имени и появляется отдельным пунктом в списке
-        выбора — на неё можно направить отдельные правила.
-      </div>
-    {/if}
-  </div>
-
-  <div class="head sets-head">
-    <button class="panel-h link" on:click={() => (showSets = !showSets)}>
-      {showSets ? "▾" : "▸"} Наборы правил{cfg.ruleSets?.length ? ` (${cfg.ruleSets.length})` : ""}
-    </button>
-    <button class="mini wide" on:click={addSetDraft}>+ Набор</button>
-  </div>
-
-  {#if showSets}
-    <div class="groups">
-      {#each cfg.ruleSets || [] as s (s.id)}
-        <div class="group set">
-          <input class="fld gname" bind:value={s.tag} on:change={() => saveSet(s)} />
-          <input class="fld gfilter" bind:value={s.url} on:change={() => saveSet(s)}
-                 placeholder="https://…/list.srs" />
-          <select class="fld sfmt" bind:value={s.format} on:change={() => saveSet(s)}>
-            <option value="binary">.srs</option>
-            <option value="source">json</option>
-          </select>
-          <select class="fld sfmt" bind:value={s.detour} on:change={() => saveSet(s)}>
-            <option value="direct">качать напрямую</option>
-            <option value="proxy">качать через прокси</option>
-          </select>
-          <button class="mini danger" title="Удалить набор" on:click={() => removeSet(s)}>✕</button>
-        </div>
+  <div class="final card">
+    <Icon name="route" size={16} />
+    <span class="flbl">{$t("routing.final")}</span>
+    <div class="segmented">
+      {#each ["proxy", "direct"] as f}
+        <button class:on={cfg.final === f} on:click={() => changeFinal(f)}>
+          {$t("routing.final." + f)}
+        </button>
       {/each}
+    </div>
+  </div>
+</div>
 
-      {#if newSet}
-        <div class="group set">
-          <input class="fld gname" bind:value={newSet.tag} placeholder="имя-набора" />
-          <input class="fld gfilter" bind:value={newSet.url} placeholder="https://…/list.srs" />
-          <select class="fld sfmt" bind:value={newSet.format}>
-            <option value="binary">.srs</option>
-            <option value="source">json</option>
-          </select>
-          <select class="fld sfmt" bind:value={newSet.detour}>
-            <option value="direct">качать напрямую</option>
-            <option value="proxy">качать через прокси</option>
-          </select>
-          <button class="mini" title="Сохранить" on:click={() => saveSet(newSet)}>✓</button>
-          <button class="mini danger" title="Отмена" on:click={() => (newSet = null)}>✕</button>
-        </div>
-      {/if}
+{#if showCheck}
+  <DomainCheck on:close={() => (showCheck = false)} />
+{/if}
 
-      <div class="hint">
-        Ядро само качает набор по адресу и обновляет раз в сутки, храня его в кэше.
-        Имя набора появится в правиле «Готовый набор». Если источник заблокирован —
-        поставь «качать через прокси».
+{#if showGroups}
+  <div class="modal-backdrop" role="button" tabindex="0"
+       on:click={() => (showGroups = false)}
+       on:keydown={(e) => e.key === "Escape" && (showGroups = false)}>
+    <div class="modal" role="dialog" on:click|stopPropagation on:keydown|stopPropagation>
+      <div class="modal-h">
+        {$t("routing.groups")}
+        <button class="icon-btn" on:click={() => (showGroups = false)} title={$t("common.close")}>
+          <Icon name="close" size={15} />
+        </button>
+      </div>
+
+      <div class="modal-b">
+        {#each cfg.groups as g (g.id)}
+          <div class="line">
+            <input class="fld gname" bind:value={g.name} on:change={() => saveGroup(g)} />
+            <select class="fld" bind:value={g.type} on:change={() => saveGroup(g)}>
+              <option value="urltest">{$t("routing.group.urltest")}</option>
+              <option value="select">{$t("routing.group.select")}</option>
+            </select>
+            <input class="fld mono" bind:value={g.filter} on:change={() => saveGroup(g)}
+                   placeholder={$t("routing.group.filterPh")} />
+            <button class="icon-btn danger" title={$t("common.delete")} on:click={() => removeGroup(g)}>
+              <Icon name="trash" size={14} />
+            </button>
+          </div>
+        {/each}
+
+        {#if newGroup}
+          <div class="line">
+            <input class="fld gname" bind:value={newGroup.name} placeholder={$t("routing.group.name")} />
+            <select class="fld" bind:value={newGroup.type}>
+              <option value="urltest">{$t("routing.group.urltest")}</option>
+              <option value="select">{$t("routing.group.select")}</option>
+            </select>
+            <input class="fld mono" bind:value={newGroup.filter} placeholder="^NL" />
+            <button class="icon-btn" title={$t("common.save")} on:click={() => saveGroup(newGroup)}>
+              <Icon name="check" size={14} />
+            </button>
+            <button class="icon-btn danger" title={$t("common.cancel")} on:click={() => (newGroup = null)}>
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        {/if}
+
+        <div class="hint">{$t("routing.groupsHint")}</div>
+      </div>
+
+      <div class="modal-f">
+        <button class="btn" on:click={addGroupDraft} disabled={!!newGroup}>
+          <Icon name="plus" size={14} />{$t("routing.addGroup")}
+        </button>
+        <button class="btn primary" on:click={() => (showGroups = false)}>{$t("common.close")}</button>
       </div>
     </div>
-  {/if}
-</div>
+  </div>
+{/if}
+
+{#if showSets}
+  <div class="modal-backdrop" role="button" tabindex="0"
+       on:click={() => (showSets = false)}
+       on:keydown={(e) => e.key === "Escape" && (showSets = false)}>
+    <div class="modal wide" role="dialog" on:click|stopPropagation on:keydown|stopPropagation>
+      <div class="modal-h">
+        {$t("routing.sets")}
+        <button class="icon-btn" on:click={() => (showSets = false)} title={$t("common.close")}>
+          <Icon name="close" size={15} />
+        </button>
+      </div>
+
+      <div class="modal-b">
+        {#each cfg.ruleSets || [] as s (s.id)}
+          <div class="line">
+            <input class="fld gname" bind:value={s.tag} on:change={() => saveSet(s)} />
+            <input class="fld mono" bind:value={s.url} on:change={() => saveSet(s)}
+                   placeholder={$t("routing.set.urlPh")} />
+            <select class="fld sm" bind:value={s.format} on:change={() => saveSet(s)}>
+              <option value="binary">{$t("routing.set.binary")}</option>
+              <option value="source">{$t("routing.set.source")}</option>
+              <option value="lst">{$t("routing.set.lst")}</option>
+            </select>
+            <select class="fld sm" bind:value={s.detour} on:change={() => saveSet(s)}>
+              <option value="direct">{$t("routing.set.direct")}</option>
+              <option value="proxy">{$t("routing.set.proxy")}</option>
+            </select>
+            <!-- Списки .lst качаем мы сами, поэтому их можно обновить руками;
+                 .srs и json ядро тянет по своему расписанию. -->
+            {#if s.format === "lst"}
+              <button class="icon-btn" title={$t("routing.set.refresh")}
+                      disabled={refreshing === s.id} on:click={() => refreshSet(s)}>
+                <Icon name="refresh" size={14} />
+              </button>
+            {/if}
+            <button class="icon-btn danger" title={$t("common.delete")} on:click={() => removeSet(s)}>
+              <Icon name="trash" size={14} />
+            </button>
+          </div>
+        {/each}
+
+        {#if newSet}
+          <div class="line">
+            <input class="fld gname" bind:value={newSet.tag} placeholder={$t("routing.set.tagPh")} />
+            <input class="fld mono" bind:value={newSet.url} placeholder={$t("routing.set.urlPh")} />
+            <select class="fld sm" bind:value={newSet.format}>
+              <option value="binary">{$t("routing.set.binary")}</option>
+              <option value="source">{$t("routing.set.source")}</option>
+              <option value="lst">{$t("routing.set.lst")}</option>
+            </select>
+            <select class="fld sm" bind:value={newSet.detour}>
+              <option value="direct">{$t("routing.set.direct")}</option>
+              <option value="proxy">{$t("routing.set.proxy")}</option>
+            </select>
+            <button class="icon-btn" title={$t("common.save")} on:click={() => saveSet(newSet)}>
+              <Icon name="check" size={14} />
+            </button>
+            <button class="icon-btn danger" title={$t("common.cancel")} on:click={() => (newSet = null)}>
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        {/if}
+
+        <div class="hint">{$t("routing.setsHint")}</div>
+      </div>
+
+      <div class="modal-f">
+        <button class="btn" on:click={addSetDraft} disabled={!!newSet}>
+          <Icon name="plus" size={14} />{$t("routing.addSet")}
+        </button>
+        <button class="btn primary" on:click={() => (showSets = false)}>{$t("common.close")}</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if editing}
   <RuleEditor rule={editing} groups={cfg.groups} ruleSets={cfg.ruleSets || []}
@@ -272,55 +374,76 @@
 {/if}
 
 <style>
-  .wrap { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; }
-  .modes { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .modes .lbl { font-size: 13px; color: var(--muted); }
-  .mode-hint { margin-left: auto; }
-  .tab {
-    background: var(--bg); border: 1px solid var(--line); color: var(--text-2);
-    padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit;
+  .cnt {
+    background: var(--accent-dim);
+    color: var(--accent-2);
+    border-radius: var(--r-pill);
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 700;
   }
-  .tab.on { background: #1f6feb; border-color: #1f6feb; color: #fff; font-weight: 700; }
 
-  .head { display: flex; align-items: center; justify-content: space-between; }
-  .head .panel-h { margin: 0; }
+  .modebar { display: flex; align-items: center; gap: var(--s-3); flex: none; }
 
-  .list { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; min-height: 80px; }
-  .list.off { opacity: 0.45; }
-  .rule {
-    display: flex; align-items: center; gap: 8px; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
-  }
+  /* В режимах Global/Direct список ядром игнорируется — гасим его целиком,
+     чтобы не создавать впечатления, будто правила работают. */
+  .rows.off { opacity: 0.45; }
+
+  .rule { cursor: grab; }
   .rule.disabled { opacity: 0.5; }
-  .grip { color: var(--muted-2); cursor: grab; font-size: 12px; letter-spacing: -2px; }
-  .body { flex: 1; min-width: 0; text-align: left; }
-  .name { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .grip { display: flex; color: var(--muted); flex: none; }
+  .check { gap: 0; }
+
+  .body { flex: 1; min-width: 0; }
+  .name {
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
   .meta {
-    font-size: 11px; color: var(--muted); overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 1px;
   }
-  .tag {
-    font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
-    background: var(--line); color: var(--muted);
-  }
-  .tag.frag { background: #3a2d00; color: var(--yellow); }
+
   .act {
-    font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
-    background: #21262d; color: var(--text-2); flex: none;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: var(--r-pill);
+    background: var(--line);
+    color: var(--text-2);
+    flex: none;
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .act.proxy { color: #58a6ff; }
-  .act.direct { color: var(--green); }
-  .act.block { color: var(--red); }
+  .act.proxy { color: var(--accent-2); }
+  .act.direct { color: var(--ok); }
+  .act.block { color: var(--danger); }
 
-  .final { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
-
-  .groups { display: flex; flex-direction: column; gap: 6px; }
-  .group { display: flex; align-items: center; gap: 6px; }
-  .gname { width: 150px; }
-  .gfilter { flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-  .sfmt { flex: none; width: auto; font-size: 12px; }
-  .sets-head .link {
-    background: none; border: 0; color: var(--muted); font: inherit; font-weight: 700;
-    font-size: 13px; cursor: pointer; padding: 0; margin: 0;
+  .final {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: 10px 14px;
+    flex: none;
+    color: var(--text-2);
   }
+  .flbl { font-size: 13px; font-weight: 600; margin-right: auto; }
+
+  .modal-b { display: flex; flex-direction: column; gap: var(--s-2); }
+  .modal.wide { max-width: 760px; }
+  .line { display: flex; align-items: center; gap: 6px; }
+  .gname { width: 150px; flex: none; }
+  .mono { flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .fld.sm { flex: none; width: auto; font-size: 12px; }
+  .modal-f { justify-content: space-between; }
 </style>

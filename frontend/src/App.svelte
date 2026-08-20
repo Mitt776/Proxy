@@ -1,128 +1,165 @@
 <script lang="ts">
-  // Оболочка приложения: шапка с состоянием, постоянная панель подключения
-  // и вкладки. Вся логика живёт в компонентах lib/ — здесь только раскладка.
+  // Оболочка приложения: своя шапка окна, сайдбар с разделами и область
+  // контента. Логика живёт в компонентах lib/ — здесь только раскладка,
+  // первичная загрузка и переключение разделов.
   import { onMount } from "svelte";
-  import { GetAppInfo, GetState } from "../wailsjs/go/main/App";
+  import { GetAppInfo, GetActiveProfileID, ListProfiles } from "../wailsjs/go/main/App";
   import { EventsOn } from "../wailsjs/runtime/runtime";
   import "./lib/ui.css";
 
-  import ConnectionPanel from "./lib/ConnectionPanel.svelte";
+  import Splash from "./lib/shell/Splash.svelte";
+  import TitleBar from "./lib/shell/TitleBar.svelte";
+  import Sidebar from "./lib/shell/Sidebar.svelte";
+  import type { Tab } from "./lib/shell/tabs";
+  import type { AppInfo } from "./lib/types";
+
+  import ConnectScreen from "./lib/connect/ConnectScreen.svelte";
   import ProfilesTab from "./lib/ProfilesTab.svelte";
   import RulesTab from "./lib/RulesTab.svelte";
   import ConnectionsTab from "./lib/ConnectionsTab.svelte";
   import LogsTab from "./lib/LogsTab.svelte";
   import SettingsTab from "./lib/SettingsTab.svelte";
-  import { coreState, errorText, toastText } from "./lib/store";
 
-  let info = {
-    coreVersion: "", coreFound: false, corePath: "", coreCustom: false,
-    assetsDir: "", dataDir: "", state: "stopped",
+  import { initStore, toastText } from "./lib/store";
+  import { initLang } from "./lib/i18n";
+
+  let info: AppInfo = {
+    appVersion: "",
+    coreVersion: "",
+    coreFound: false,
+    corePath: "",
+    coreCustom: false,
+    assetsDir: "",
+    dataDir: "",
+    state: "stopped",
+    since: 0,
+    isAdmin: false,
+    lang: "ru",
+    startHidden: false,
   };
 
-  type Tab = "profiles" | "routing" | "connections" | "logs" | "settings";
-  let tab: Tab = "profiles";
-  const tabs: [Tab, string][] = [
-    ["profiles", "Профили"],
-    ["routing", "Маршрутизация"],
-    ["connections", "Соединения"],
-    ["logs", "Журнал"],
-    ["settings", "Настройки"],
-  ];
+  let tab: Tab = "connect";
 
-  const stateLabel: Record<string, string> = {
-    stopped: "Отключено", starting: "Запуск…", running: "Подключено", error: "Ошибка",
-  };
+  // Знак с заставки приземляется в этот элемент шапки.
+  let markSlot: HTMLElement | null = null;
+  let markVisible = false;
+  let showSplash = true;
+
+  let profileName = "";
 
   onMount(async () => {
     info = await GetAppInfo();
-    coreState.set(await GetState());
+    initLang(info.lang);
 
-    EventsOn("core:state", (p: { state: string; reason: string }) => {
-      coreState.set(p.state);
-      if (p.reason) errorText.set(p.reason);
-    });
+    // Автозапуск в трей: окна не видно, крутить заставку не для кого — а при
+    // показе из трея она бы только раздражала.
+    if (info.startHidden) {
+      showSplash = false;
+      markVisible = true;
+    }
+
+    await initStore();
+    await loadProfile();
+    EventsOn("profiles:changed", loadProfile);
   });
+
+  async function loadProfile() {
+    const [list, activeId] = await Promise.all([ListProfiles(), GetActiveProfileID()]);
+    const p = (list || []).find((x) => x.id === activeId);
+    profileName = p ? p.name : "";
+  }
 </script>
 
-<main>
-  <header>
-    <h1>
-      Proxy
-      <span class="sub">
-        на базе sing-box{info.coreVersion ? " • " + info.coreVersion.replace("sing-box version ", "") : ""}
-      </span>
-    </h1>
-    <div class="badge {$coreState}">{stateLabel[$coreState] || $coreState}</div>
-  </header>
+<div class="app">
+  <TitleBar bind:slotEl={markSlot} {markVisible} />
 
-  <div class="cols">
-    <section class="panel left">
-      <div class="panel-h">Подключение</div>
-      <ConnectionPanel {info} />
-    </section>
+  <div class="body">
+    <Sidebar bind:tab {profileName} isAdmin={info.isAdmin} coreFound={info.coreFound} />
 
-    <section class="panel right">
-      <nav class="tabbar">
-        {#each tabs as [id, label]}
-          <button class:on={tab === id} on:click={() => (tab = id)}>{label}</button>
-        {/each}
-      </nav>
-
-      {#if tab === "profiles"}
+    <!-- Панель висит поверх контента, поэтому отступ под неё держит сам контент.
+         Экран «Подключение» его снимает: там центральный блок обязан стоять
+         ровно посередине окна, а не посередине остатка после панели. -->
+    <main class:bare={tab === "connect"}>
+      {#if tab === "connect"}
+        <ConnectScreen {info} hasProfile={!!profileName} />
+      {:else if tab === "profiles"}
         <ProfilesTab />
       {:else if tab === "routing"}
         <RulesTab />
-      {:else if tab === "connections"}
+      {:else if tab === "traffic"}
         <ConnectionsTab />
       {:else if tab === "logs"}
         <LogsTab />
       {:else}
         <SettingsTab {info} on:info={(e) => (info = e.detail)} />
       {/if}
-    </section>
-  </div>
 
-  {#if $toastText}<div class="toast">{$toastText}</div>{/if}
-</main>
+      <span class="version">{info.appVersion}</span>
+    </main>
+  </div>
+</div>
+
+{#if showSplash}
+  <Splash
+    target={markSlot}
+    on:landed={() => (markVisible = true)}
+    on:done={() => (showSplash = false)}
+  />
+{/if}
+
+{#if $toastText}<div class="toast">{$toastText}</div>{/if}
 
 <style>
-  :global(body) { margin: 0; background: #0d1117; }
-  main {
-    font-family: "Nunito", system-ui, sans-serif;
-    color: var(--text);
-    padding: 16px 20px;
+  .app {
+    height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    height: calc(100vh - 32px);
-    box-sizing: border-box;
+    background: var(--bg);
+    color: var(--text);
   }
-  header { display: flex; align-items: center; justify-content: space-between; }
-  h1 { font-size: 20px; margin: 0; font-weight: 800; }
-  .sub { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 6px; }
 
-  .badge {
-    padding: 5px 14px; border-radius: 999px; font-size: 13px;
-    font-weight: 700; background: var(--line);
+  .body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
   }
-  .badge.running { background: #1a7f37; }
-  .badge.starting { background: #9e6a03; }
-  .badge.error { background: #b62324; }
 
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex: 1; min-height: 0; }
-  .right { gap: 12px; }
-
-  .tabbar { display: flex; gap: 6px; }
-  .tabbar button {
-    flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--text-2);
-    padding: 6px 4px; border-radius: 6px; cursor: pointer; font-size: 12.5px; font-family: inherit;
-    white-space: nowrap;
+  main {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    /* Слева — панель (22px отступа + 104px ширины) плюс воздух. */
+    padding: var(--s-5) var(--s-5) var(--s-5) 150px;
+    overflow: auto;
   }
-  .tabbar button.on { background: #1f6feb; border-color: #1f6feb; color: #fff; font-weight: 700; }
+  main.bare {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* Версия приложения — мелко в правом нижнем углу области контента. */
+  .version {
+    position: absolute;
+    right: var(--s-3);
+    bottom: var(--s-2);
+    font-size: 10px;
+    color: var(--muted);
+    pointer-events: none;
+  }
 
   .toast {
-    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 400;
-    background: #1a7f37; color: #fff; font-size: 13px; font-weight: 700;
-    padding: 9px 18px; border-radius: 999px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    position: fixed;
+    bottom: 26px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 400;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 20px;
+    border-radius: var(--r-pill);
+    box-shadow: var(--shadow);
   }
 </style>

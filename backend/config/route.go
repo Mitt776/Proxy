@@ -9,6 +9,18 @@ import (
 	"Proxy/backend/rules"
 )
 
+// tlsFragmentFallbackDelay — пауза между кусками ClientHello, когда ядро не смогло
+// вывести её из RTT до назначения.
+//
+// Собственный дефолт sing-box — 500 мс, и штатное ядро 1.13 берёт его всегда:
+// рукопожатие с example.com росло со 135 мс до 630 мс, и так на каждом соединении
+// под правилом. При этом разрез на две TCP-записи происходит при любой ненулевой
+// паузе (замерено от 1 мс), так что хватает одного RTT — 80 мс перекрывают путь
+// до типичного зарубежного узла и стоят вшестеро дешевле.
+//
+// Ноль ставить нельзя: ядро считает его «не задано» и возвращается к тем же 500 мс.
+const tlsFragmentFallbackDelay = "80ms"
+
 // routeBuilder переводит пользовательские правила (backend/rules) в route-правила
 // sing-box. Он же собирает список локальных rule-set'ов, на которые эти правила
 // ссылаются, — в конфиг попадают только реально используемые .srs.
@@ -162,9 +174,15 @@ func (b *routeBuilder) convert(r rules.Rule) (json.RawMessage, bool, error) {
 
 	// tls_fragment — поле действия route, поэтому его приходится указывать явно
 	// (по умолчанию action выводится из наличия outbound).
-	if r.TLSFragment && r.Action != rules.ActionBlock {
+	//
+	// Только с direct: ядро режет полезную нагрузку, которую пишет в outbound, —
+	// у прокси-правила разрез ложится внутрь туннеля и наружу уходит внутри
+	// шифрования, то есть провайдер видит ровно то же, что и без флага, а
+	// задержка платится. Замерено на обоих ядрах, см. tlsfragment_core_test.go.
+	if r.TLSFragment && r.Action == rules.ActionDirect {
 		m["action"] = "route"
 		m["tls_fragment"] = true
+		m["tls_fragment_fallback_delay"] = tlsFragmentFallbackDelay
 	}
 
 	raw, err := json.Marshal(m)
@@ -196,7 +214,28 @@ func (b *routeBuilder) addRuleSet(tag string) bool {
 	if b.setsUsed[tag] {
 		return true
 	}
-	if set := b.opts.Routing.FindRuleSet(tag); set != nil && set.Type == rules.SetRemote {
+	set := b.opts.Routing.FindRuleSet(tag)
+
+	// Список .lst приложение скачало и сконвертировало заранее — ядру он виден
+	// обычным локальным source-набором. Если файла ещё нет (не докачался или
+	// список пустой), правило выбрасываем: ссылка на несуществующий набор
+	// не даёт ядру стартовать.
+	if set != nil && set.IsList() {
+		if b.opts.ListSetDir == "" {
+			return false
+		}
+		path := ListSetPath(b.opts.ListSetDir, tag)
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+		b.setsUsed[tag] = true
+		b.ruleSets = append(b.ruleSets, ruleSet{
+			Type: "local", Tag: tag, Format: rules.FormatSource, Path: path,
+		})
+		return true
+	}
+
+	if set != nil && set.Type == rules.SetRemote {
 		// Качать можно и через прокси — для списков, заблокированных у провайдера.
 		// Но если нод нет, единственный работающий detour — direct.
 		detour := DirectTag
