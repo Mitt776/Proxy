@@ -24,7 +24,6 @@ import (
 	"Proxy/backend/settings"
 	"Proxy/backend/system"
 
-	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -34,7 +33,7 @@ const appName = "MitM"
 // AppVersion — версия приложения. Единственный источник правды для UI и трея;
 // при выпуске бампится здесь и в wails.json (блок `info.productVersion`, откуда
 // её берут свойства exe-файла).
-const AppVersion = "2.0.0"
+const AppVersion = "2.0.1"
 
 // tunAutostartFlag передаётся перезапущенному с повышением прав процессу,
 // чтобы он сразу поднял TUN на активном профиле.
@@ -70,6 +69,10 @@ type App struct {
 	// элевированный процесс к общей user data folder — окно будет пустым.
 	relaunching atomic.Bool
 
+	// uiReady — startup отработал и a.ctx годен для вызовов runtime. Нужен
+	// горутине, которая слушает запуски второй копии: она стартует раньше окна.
+	uiReady atomic.Bool
+
 	wasRunning   atomic.Bool // для уведомлений: было ли соединение активно
 	userStopping atomic.Bool // пользователь сам нажал «Отключить» (не считаем обрывом)
 
@@ -97,6 +100,7 @@ func NewApp() *App {
 // загружаем профили и подписываем колбэки ядра на runtime-события фронтенда.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.uiReady.Store(true)
 	a.clashSecret = randomSecret()
 	a.clash = core.NewClashClient(fmt.Sprintf("127.0.0.1:%d", a.clashPort), a.clashSecret)
 
@@ -247,10 +251,16 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 	return false
 }
 
-// onSecondInstance вызывается Wails, когда пользователь запускает ещё одну копию
-// приложения. Вторую копию не плодим (её процесс завершится сам) — вместо этого
-// разворачиваем и поднимаем уже работающее окно. Это чинит «кучу копий в трее».
-func (a *App) onSecondInstance(_ options.SecondInstanceData) {
+// onSecondInstance вызывается, когда пользователь запускает ещё одну копию
+// приложения (см. system.ClaimSingleInstance). Вторую копию не плодим — её
+// процесс завершается сам, а мы разворачиваем и поднимаем уже работающее окно.
+//
+// Зовётся из чужой горутины и может успеть раньше startup: до готовности ctx
+// показывать нечего, а runtime с nil-контекстом уронил бы приложение.
+func (a *App) onSecondInstance() {
+	if !a.uiReady.Load() {
+		return
+	}
 	runtime.WindowUnminimise(a.ctx)
 	runtime.WindowShow(a.ctx)
 }

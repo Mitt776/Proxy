@@ -31,18 +31,12 @@ func main() {
 	// При автозапуске (--minimized) стартуем скрытыми в трее.
 	startHidden := hasFlag(system.MinimizedFlag)
 
-	// Single instance: вторая копия не запускается, а показывает уже открытое окно.
-	// Исключение — перезапуск с повышением прав ради TUN (это наш же процесс, ему
-	// нужно стартовать, пока прежний ещё закрывается).
-	var singleInstance *options.SingleInstanceLock
-	if !hasFlag(tunAutostartFlag) {
-		singleInstance = &options.SingleInstanceLock{
-			// Идентификатор намеренно остался с прежнего имени приложения: смена
-			// строки означает, что старая и новая версии не видят друг друга, и во
-			// время обновления на экране окажутся две копии сразу.
-			UniqueId:               "proxy-singbox-client-1f6a2b",
-			OnSecondInstanceLaunch: app.onSecondInstance,
-		}
+	// Вторую копию не плодим: показываем окно уже работающей и уходим. Исключение —
+	// перезапуск с повышением прав ради TUN: это наш же процесс, и предка мы уже
+	// дождались выше. Если он всё-таки завис, стартуем всё равно — остаться без TUN
+	// хуже, чем показать вторую копию на те секунды, что предок ещё жив.
+	if !system.ClaimSingleInstance(app.onSecondInstance) && !hasFlag(tunAutostartFlag) {
+		return
 	}
 
 	// Create application with options
@@ -59,12 +53,11 @@ func main() {
 		},
 		// Цвет обязан совпадать с токеном --bg фронтенда: между стартом WebView2 и
 		// первым кадром окно залито именно им, и расхождение видно вспышкой.
-		BackgroundColour:   &options.RGBA{R: 14, G: 10, B: 26, A: 1},
-		StartHidden:        startHidden,
-		SingleInstanceLock: singleInstance,
-		OnStartup:          app.startup,
-		OnShutdown:         app.shutdown,
-		OnBeforeClose:      app.beforeClose,
+		BackgroundColour: &options.RGBA{R: 14, G: 10, B: 26, A: 1},
+		StartHidden:      startHidden,
+		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
+		OnBeforeClose:    app.beforeClose,
 		Bind: []interface{}{
 			app,
 		},
