@@ -12,9 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Модуль Go по-прежнему называется `Proxy` — это внутреннее имя в путях импорта всех файлов, к
 названию приложения отношения не имеет и переименованию не подлежит.
 
-**Версия приложения бампится в двух местах сразу:** `const AppVersion` в [app.go](app.go) (его
-читают UI и трей) и блок `info.productVersion` в [wails.json](wails.json) (ресурс версии в exe).
+**Версия приложения бампится в трёх местах сразу:** `const AppVersion` в [app.go](app.go) (его
+читают UI и трей), блок `info.productVersion` в [wails.json](wails.json) (ресурс версии в exe) и
+`versionName`/`versionCode` в [android/app/build.gradle.kts](android/app/build.gradle.kts).
 Разъехавшиеся значения = «В программе 2.0.0, в свойствах файла 1.3.1».
+`versionCode` — целое по правилу `major*10000 + minor*100 + patch` (2.1.0 → 20100): Android
+сравнивает версии только по нему, и не возросшее число означает «обновления нет».
 
 ## Команды
 
@@ -62,6 +65,23 @@ sing-box верить нельзя, только вывод `check` штатно
 Туда же кладётся [build/README-portable.txt](build/README-portable.txt) под именем `README.txt`:
 раньше он жил только внутри `build\bin\` (каталог в .gitignore), поэтому благополучно отстал от
 приложения на две версии и продолжал советовать запускать `Proxy.exe`.
+
+### Сборка под Android
+
+```powershell
+.\scripts\android-deps.ps1          # разово: клон патченого wireguard-go + gomobile
+cd mobile
+gomobile bind -target=android/arm64,android/amd64 -androidapi 24 `
+  -javapkg io.github.mitt776 `
+  -tags "with_gvisor,with_quic,with_utls,with_clash_api,with_xhttp" `
+  -o ..\android\app\libs\mitm.aar .
+cd ..\android
+.\gradlew assembleDebug              # или assembleRelease
+```
+
+Требуется `ANDROID_HOME`, `ANDROID_NDK_HOME` и JDK 17+. **AAR обязателен к пересборке после
+любой правки в `mobile/`** — Gradle подхватывает готовый файл и об изменениях в Go не знает,
+симптом «Unresolved reference» на свежем методе.
 
 ## Архитектура
 
@@ -313,5 +333,12 @@ UAC-перезапуске ради TUN. Во-первых, elevated-проце�
 
 ## Лицензии
 
-GUI авторский; sing-box и его форк — GPLv3, подключаются **только как отдельные процессы**. Не
-линковать их код в бинарь.
+GUI авторский; sing-box и его форк — GPLv3.
+
+**На Windows они подключаются только как отдельные процессы — не линковать их код в бинарь.**
+Правило остаётся в силе для десктопной сборки.
+
+**На Android иначе нельзя:** `/dev/net/tun` без рута недоступен, TUN выдаёт `VpnService`
+файловым дескриптором внутрь процесса приложения, отдельного процесса с ядром там не существует
+в принципе. Поэтому в APK ядро линкуется библиотекой, и **Android-часть выпускается под GPLv3**
+с исходниками (см. [android/](android/) и [mobile/](mobile/)). Windows-часть это не затрагивает.
