@@ -9,3 +9,4 @@ app/libs/*.jar
 .cxx/
 app/src/main/assets/rulesets/
 app/src/main/assets/web/
+app/src/main/assets/LICENSE.txt

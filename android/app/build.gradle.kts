@@ -1,7 +1,19 @@
+import java.util.Properties
+
 plugins {
     // Kotlin встроен в AGP 9 — отдельный плагин kotlin-android больше не применяется.
     id("com.android.application")
 }
+
+// Ключ подписи и пароли живут в android/local.properties (файл в .gitignore), сам
+// keystore — вне репозитория вовсе (%USERPROFILE%\.android-keys\mitm.jks).
+// Если ключа нет — конфигурация подписи просто не заводится: у стороннего сборщика
+// release выйдет неподписанным, а не свалится на первой же строке.
+val keyProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val keyStoreFile = keyProps.getProperty("mitm.storeFile")?.let { file(it) }?.takeIf { it.exists() }
 
 android {
     namespace = "io.github.mitt776.mitm"
@@ -16,9 +28,14 @@ android {
         // мизерна.
         minSdk = 24
         targetSdk = 36
-        // versionCode = major*10000 + minor*100 + patch, см. план порта.
-        versionCode = 20100
+        // Версия бампится в трёх местах сразу (app.go, wails.json и здесь) — см. CLAUDE.md.
+        // Здесь руками задаётся только строка: versionCode считается из неё по правилу
+        // major*10000 + minor*100 + patch (2.1.0 → 20100). Android сравнивает версии
+        // исключительно по этому числу, и не возросшее означает «обновления нет» —
+        // разъехаться с versionName ему нельзя.
         versionName = "2.1.0"
+        versionCode = versionName!!.split(".").map(String::toInt)
+            .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
 
         ndk {
             // Релиз — только arm64: 32-битных телефонов практически не осталось, а каждая
@@ -27,9 +44,25 @@ android {
         }
     }
 
+    if (keyStoreFile != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = keyStoreFile
+                storePassword = keyProps.getProperty("mitm.storePassword")
+                keyAlias = keyProps.getProperty("mitm.keyAlias")
+                keyPassword = keyProps.getProperty("mitm.keyPassword")
+                // Подпись только схемой v2: она появилась ровно в Android 7.0, ниже
+                // которого мы не опускаемся, а старую v1 (JAR) AGP при minSdk 24 всё
+                // равно игнорирует, сколько её ни включай.
+                enableV2Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
         debug {
             // Эмулятор x86_64 — единственная причина второй ABI.
@@ -54,8 +87,21 @@ val copyRuleSets = tasks.register<Copy>("copyRuleSets") {
     into(layout.projectDirectory.dir("src/main/assets/rulesets"))
 }
 
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
-    .configureEach { dependsOn(copyRuleSets) }
+// GPLv3 требует отдать пользователю сам текст лицензии вместе с программой, а не
+// ссылку на него: ядро здесь линкуется в APK. Кладём файл в ассеты — раздел
+// «О программе» показывает его тем же WebViewAssetLoader, каким отдаётся интерфейс.
+val copyLicense = tasks.register<Copy>("copyLicense") {
+    from(rootProject.file("LICENSE"))
+    into(layout.projectDirectory.dir("src/main/assets"))
+    rename { "LICENSE.txt" }
+}
+
+// Каталог ассетов читает не только упаковщик: на release туда же заглядывает lint
+// (generateReleaseLintVitalReportModel), и без объявленной зависимости Gradle 9 валит
+// сборку на «implicit dependency» — на debug этого не видно, там lint-vital не
+// запускается вовсе. Поэтому копирование цепляется ко всему, что ассеты читает.
+tasks.matching { it.name.contains("assets", true) || it.name.contains("lint", true) }
+    .configureEach { dependsOn(copyRuleSets, copyLicense) }
 
 dependencies {
     // mitm.aar — продукт gomobile bind, в git не хранится (см. .gitignore).

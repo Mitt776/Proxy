@@ -337,6 +337,8 @@ export const en: Record<string, string> = {
   "m.settings.appsCount.many": "{n} apps bypass the tunnel",
   "m.settings.appsNeedReconnect": "The list applies on the next connection",
   "m.settings.license": "The sing-box core is linked into the app, so the Android build is distributed under GPLv3 together with its source code.",
+  "m.settings.licenseText": "License text",
+  "m.settings.licenseFail": "Could not read the license text from the app assets.",
   "m.settings.sources": "Source code",
   "m.update.ready": "Version {v} is available",
   "m.apps.title": "Apps bypassing the VPN",

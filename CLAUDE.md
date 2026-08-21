@@ -12,12 +12,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Модуль Go по-прежнему называется `Proxy` — это внутреннее имя в путях импорта всех файлов, к
 названию приложения отношения не имеет и переименованию не подлежит.
 
-**Версия приложения бампится в трёх местах сразу:** `const AppVersion` в [app.go](app.go) (его
-читают UI и трей), блок `info.productVersion` в [wails.json](wails.json) (ресурс версии в exe) и
-`versionName`/`versionCode` в [android/app/build.gradle.kts](android/app/build.gradle.kts).
+**Версия приложения бампится в трёх местах сразу:** `const AppVersion` в
+[backend/appcore/version.go](backend/appcore/version.go) (его читают UI, трей и проверка
+обновлений), блок `info.productVersion` в [wails.json](wails.json) (ресурс версии в exe) и
+`versionName` в [android/app/build.gradle.kts](android/app/build.gradle.kts).
 Разъехавшиеся значения = «В программе 2.0.0, в свойствах файла 1.3.1».
-`versionCode` — целое по правилу `major*10000 + minor*100 + patch` (2.1.0 → 20100): Android
-сравнивает версии только по нему, и не возросшее число означает «обновления нет».
+`versionCode` руками не задаётся — считается из `versionName` по правилу
+`major*10000 + minor*100 + patch` (2.1.0 → 20100): Android сравнивает версии только по нему, и
+не возросшее число означает «обновления нет».
 
 ## Команды
 
@@ -83,6 +85,39 @@ cd ..\android
 любой правки в `mobile/`** — Gradle подхватывает готовый файл и об изменениях в Go не знает,
 симптом «Unresolved reference» на свежем методе.
 
+**После релизной сборки отладочная не запустится на эмуляторе.** `-Release` делает bind только
+под `android/arm64`, и в AAR остаётся одна ABI; следующий `assembleDebug` берёт тот же файл, а
+x86_64-эмулятор падает при старте на `dlopen failed: library "libgojni.so" not found` — экран
+пустой, в logcat `NoClassDefFoundError: …mobile.Mobile`. Лечится обычным
+`.\scripts\android-build.ps1` без ключа: он биндит обе ABI.
+
+**Ассеты собираются задачами `copyRuleSets`/`copyLicense`, и зависимость от них нужна не только
+упаковщику.** На `assembleRelease` в `src/main/assets` заглядывает ещё и lint
+(`lintVitalAnalyzeRelease`, `generateReleaseLintVitalReportModel`), а Gradle 9 валит сборку на
+«implicit dependency» у любого читателя без объявленной связи. На `assembleDebug` этого не видно
+вовсе — lint-vital там не запускается, поэтому проверять правки в ассетах обязательно релизной
+сборкой.
+
+### Подпись Android-релиза
+
+Ключ — `%USERPROFILE%\.android-keys\mitm.jks` (alias `mitm`, RSA-4096, 30 лет), пути и пароли —
+в `android/local.properties` (`mitm.storeFile`/`storePassword`/`keyAlias`/`keyPassword`). Ни того,
+ни другого в репозитории нет и быть не должно. **Ключ невосстановим:** Android разрешает
+обновление только APK с тем же сертификатом, и его потеря означает, что установленные копии
+обновить больше нечем — только переустановкой с потерей данных. Копия обязана лежать вне этой
+машины.
+
+`build.gradle.kts` заводит `signingConfigs` только если файл ключа реально существует: у
+стороннего сборщика `assembleRelease` тогда даёт неподписанный APK, а не падает на пустом пути.
+Пути в `.properties` пишутся через «/» — обратный слэш там управляющий символ.
+
+`versionCode` **считается из `versionName`** прямо в `build.gradle.kts` по правилу
+`major*10000 + minor*100 + patch`, руками его не задавать: Android сравнивает версии только по
+этому числу, и разъехавшись с именем, оно тихо превратится в «обновления нет».
+
+Отпечаток сертификата — `apksigner verify --print-certs <apk>`; публикуется в заметках релиза
+вместе с SHA-256 файла, чтобы установленную копию можно было сверить со сборкой.
+
 ## Архитектура
 
 **Слои.** Фронтенд (`frontend/src/App.svelte` — только раскладка и переключение разделов; вся
@@ -136,7 +171,8 @@ cd ..\android
   (выдвижное меню пяти разделов с карточкой активного профиля), `ConnectScreenMobile`,
   `ProfilesTabMobile` (список строк вместо сетки карточек, лист действий снизу, три кнопки
   импорта), `RulesTabMobile` (+ `GroupsModal`, `RuleSetsModal`), `SettingsTabMobile`,
-  `AppPicker` (приложения «мимо VPN»). Отдельные компоненты, а не ветки `{#if}` в десктопных: у
+  `AppPicker` (приложения «мимо VPN»), `LicenseModal` (текст GPLv3 из ассетов APK).
+  Отдельные компоненты, а не ветки `{#if}` в десктопных: у
   `ConnectScreen` раскладка построена вокруг трёх колонок, у `TitleBar` задача вообще другая —
   заменить рамку безрамочного окна, а из пяти секций десктопных настроек три на телефоне
   меняются целиком. Тяжёлое переиспользуется как есть: `PowerButton`, `Flag`, `ProfilePicker`,
@@ -381,7 +417,7 @@ UAC-перезапуске ради TUN. Во-первых, elevated-проце�
   поэтому в конфиг зашиты `80ms` (`tlsFragmentFallbackDelay` в `route.go`). Ноль ставить нельзя:
   ядро считает его «не задано» и возвращается к своим 500 мс.
 
-## Android (порт, в работе)
+## Android
 
 Раскладка: [mobile/](mobile/) — отдельный Go-модуль под `gomobile bind` (корневой тянет Wails,
 которому в APK делать нечего); [android/](android/) — Gradle-проект. Собирается
@@ -494,3 +530,8 @@ GUI авторский; sing-box и его форк — GPLv3.
 файловым дескриптором внутрь процесса приложения, отдельного процесса с ядром там не существует
 в принципе. Поэтому в APK ядро линкуется библиотекой, и **Android-часть выпускается под GPLv3**
 с исходниками (см. [android/](android/) и [mobile/](mobile/)). Windows-часть это не затрагивает.
+
+Полный текст лицензии — [android/LICENSE](android/LICENSE), и он **едет внутри APK**: GPLv3
+требует отдать получателю копию самой лицензии вместе с программой, ссылки на исходники мало.
+Gradle-задача `copyLicense` кладёт файл в ассеты, `lib/mobile/LicenseModal.svelte` читает его
+`fetch("../LICENSE.txt")` через тот же `WebViewAssetLoader`, которым отдаётся интерфейс.

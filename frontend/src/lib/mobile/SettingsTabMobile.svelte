@@ -10,6 +10,7 @@
   } from "$api";
   import Icon from "../icons/Icon.svelte";
   import AppPicker from "./AppPicker.svelte";
+  import LicenseModal from "./LicenseModal.svelte";
   import { connected, reportError, showToast } from "../store";
   import { t, tp, lang, setLang, tr } from "../i18n";
   import type { Lang } from "../i18n";
@@ -55,6 +56,7 @@
   }
 
   let pickerOpen = false;
+  let licenseOpen = false;
 
   async function saveApps(packages: string[]) {
     pickerOpen = false;
@@ -205,12 +207,17 @@
       <span class="v mono path">{dataDir}</span>
     </div>
 
-    <!-- Ядро линкуется в APK, поэтому Android-часть выпускается под GPLv3 и
-         обязана дать пользователю ссылку на исходники. -->
+    <!-- Ядро линкуется в APK, поэтому Android-часть выпускается под GPLv3: сам
+         текст лицензии обязан ехать вместе с программой, исходники — ссылкой. -->
     <div class="hint">{$t("m.settings.license")}</div>
-    <button class="btn sm" on:click={() => OpenURL(SOURCES)}>
-      <Icon name="link" size={13} />{$t("m.settings.sources")}
-    </button>
+    <div class="btns">
+      <button class="btn sm" on:click={() => (licenseOpen = true)}>
+        <Icon name="info" size={13} />{$t("m.settings.licenseText")}
+      </button>
+      <button class="btn sm" on:click={() => OpenURL(SOURCES)}>
+        <Icon name="link" size={13} />{$t("m.settings.sources")}
+      </button>
+    </div>
   </section>
 </div>
 
@@ -220,6 +227,10 @@
     on:save={(e) => saveApps(e.detail)}
     on:close={() => (pickerOpen = false)}
   />
+{/if}
+
+{#if licenseOpen}
+  <LicenseModal on:close={() => (licenseOpen = false)} />
 {/if}
 
 <style>
@@ -296,6 +307,7 @@
     color: var(--muted);
     margin-top: 2px;
   }
+  .btns { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 
   .ctl {
     display: flex;

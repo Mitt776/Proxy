@@ -341,6 +341,8 @@ export const ru: Record<string, string> = {
   "m.settings.appsCount.many": "{n} приложений мимо туннеля",
   "m.settings.appsNeedReconnect": "Список применится при следующем подключении",
   "m.settings.license": "Ядро sing-box встроено в приложение, поэтому Android-версия распространяется по GPLv3 вместе с исходным кодом.",
+  "m.settings.licenseText": "Текст лицензии",
+  "m.settings.licenseFail": "Не удалось прочитать текст лицензии из ассетов приложения.",
   "m.settings.sources": "Исходный код",
   "m.update.ready": "Доступна версия {v}",
   "m.apps.title": "Приложения мимо VPN",
