@@ -13,7 +13,7 @@
     SetActiveProfile,
     TestDelay,
     GetActiveProfileID,
-  } from "../../../wailsjs/go/main/App";
+  } from "$api";
   import Icon from "../icons/Icon.svelte";
   import { t, tp } from "../i18n";
   import { connected, reportError } from "../store";

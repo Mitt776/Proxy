@@ -6,7 +6,7 @@
   import {
     GetSettings, GetAutostart, SetAutostart, SetMinimizeToTray, SetBlockQUIC,
     SetSubUpdateHours, PickCoreFile, ResetCorePath, GetAppInfo,
-  } from "../../wailsjs/go/main/App";
+  } from "$api";
   import Icon from "./icons/Icon.svelte";
   import TabHead from "./shell/TabHead.svelte";
   import { connected, reportError } from "./store";

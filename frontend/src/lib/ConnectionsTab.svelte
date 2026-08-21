@@ -5,7 +5,7 @@
   import { onMount, onDestroy } from "svelte";
   import {
     GetConnections, CloseConnection, CloseAllConnections, GetRouting, AddRule,
-  } from "../../wailsjs/go/main/App";
+  } from "$api";
   import RuleEditor from "./RuleEditor.svelte";
   import Icon from "./icons/Icon.svelte";
   import TabHead from "./shell/TabHead.svelte";

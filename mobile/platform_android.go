@@ -191,15 +191,44 @@ func (p *platformImpl) ClearDNSCache()                           {}
 func (p *platformImpl) RequestPermissionForWIFIState() error     { return nil }
 func (p *platformImpl) ReadWIFIState() adapter.WIFIState         { return adapter.WIFIState{} }
 func (p *platformImpl) UsePlatformWIFIMonitor() bool             { return false }
-func (p *platformImpl) UsePlatformConnectionOwnerFinder() bool   { return false }
-func (p *platformImpl) UsePlatformNotification() bool            { return false }
-func (p *platformImpl) UsePlatformNeighborResolver() bool        { return false }
-func (p *platformImpl) UsePlatformShell() bool                   { return false }
-func (p *platformImpl) UsePlatformBridge() bool                  { return false }
-func (p *platformImpl) TailscaleHostname() string                { return "" }
+
+// UsePlatformConnectionOwnerFinder — обязательно true. Ядро на Android включает
+// поиск процесса всегда, когда есть платформенный слой; ответив false, мы отправили
+// бы его в netlink, который Android запрещает.
+func (p *platformImpl) UsePlatformConnectionOwnerFinder() bool { return true }
+func (p *platformImpl) UsePlatformNotification() bool          { return false }
+func (p *platformImpl) UsePlatformNeighborResolver() bool      { return false }
+func (p *platformImpl) UsePlatformShell() bool                 { return false }
+func (p *platformImpl) UsePlatformBridge() bool                { return false }
+func (p *platformImpl) TailscaleHostname() string              { return "" }
+
+// connectionOwner — ответ Kotlin: uid и имя пакета, если его удалось определить.
+type connectionOwner struct {
+	UID     int32  `json:"uid"`
+	Package string `json:"package"`
+}
 
 func (p *platformImpl) FindConnectionOwner(request *adapter.FindConnectionOwnerRequest) (*adapter.ConnectionOwner, error) {
-	return nil, E.New("connection owner lookup is not supported on android")
+	raw, err := p.kt.FindConnectionOwner(
+		request.IpProtocol,
+		request.SourceAddress, request.SourcePort,
+		request.DestinationAddress, request.DestinationPort,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var decoded connectionOwner
+	if err = json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, E.Cause(err, "decode connection owner")
+	}
+	owner := &adapter.ConnectionOwner{UserId: decoded.UID}
+	if decoded.Package != "" {
+		// Имя пакета — то же, что показывает Android в списке приложений; ядро
+		// отдаёт его в Clash API как процесс.
+		owner.ProcessPath = decoded.Package
+		owner.AndroidPackageNames = []string{decoded.Package}
+	}
+	return owner, nil
 }
 
 func (p *platformImpl) SendNotification(notification *adapter.Notification) error { return nil }

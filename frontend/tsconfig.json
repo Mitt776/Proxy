@@ -14,7 +14,15 @@
      */
     "allowJs": true,
     "checkJs": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    /**
+     * $api — шов между интерфейсом и Go (см. vite.config.ts). Для проверки типов
+     * берём десктопную реализацию: она сгенерирована Wails и потому эталонная,
+     * а мобильная обязана повторять её поверхность.
+     */
+    "paths": {
+      "$api": ["src/lib/api.desktop.ts"]
+    }
   },
   "include": [
     "src/**/*.d.ts",

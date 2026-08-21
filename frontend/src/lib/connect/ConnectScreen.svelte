@@ -11,8 +11,8 @@
     GetSettings,
     SetMode,
     TestDelay,
-  } from "../../../wailsjs/go/main/App";
-  import { EventsOn } from "../../../wailsjs/runtime/runtime";
+  } from "$api";
+  import { EventsOn } from "$api";
   import worldMap from "../../assets/world-map.svg?raw";
 
   import Icon from "../icons/Icon.svelte";

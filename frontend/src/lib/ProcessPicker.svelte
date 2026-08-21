@@ -2,7 +2,7 @@
   // Пикер запущенных процессов: имя, иконка exe и поиск. Отдаёт наверх
   // выбранные имена (chrome.exe) — именно они идут в правило.
   import { onMount, createEventDispatcher } from "svelte";
-  import { ListProcesses } from "../../wailsjs/go/main/App";
+  import { ListProcesses } from "$api";
   import Icon from "./icons/Icon.svelte";
   import { t } from "./i18n";
   import { errText } from "./i18n/errors";

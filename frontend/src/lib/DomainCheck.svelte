@@ -3,7 +3,7 @@
   // Считает бэкенд, спрашивая само ядро (`sing-box rule-set match`), поэтому
   // ответ совпадает с боевым поведением, а не с нашими догадками.
   import { createEventDispatcher } from "svelte";
-  import { CheckDomain } from "../../wailsjs/go/main/App";
+  import { CheckDomain } from "$api";
   import { t } from "./i18n";
   import { errText } from "./i18n/errors";
   import Icon from "./icons/Icon.svelte";

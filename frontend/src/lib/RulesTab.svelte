@@ -8,8 +8,8 @@
     GetRouting, AddRule, UpdateRule, DeleteRule, MoveRule, SetRuleEnabled,
     SetRoutingFinal, AddGroup, UpdateGroup, DeleteGroup, GetMode, SetMode,
     AddRuleSet, UpdateRuleSet, DeleteRuleSet, RefreshRuleSet,
-  } from "../../wailsjs/go/main/App";
-  import { EventsOn } from "../../wailsjs/runtime/runtime";
+  } from "$api";
+  import { EventsOn } from "$api";
   import RuleEditor from "./RuleEditor.svelte";
   import DomainCheck from "./DomainCheck.svelte";
   import Icon from "./icons/Icon.svelte";

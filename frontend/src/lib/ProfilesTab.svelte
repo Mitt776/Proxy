@@ -7,8 +7,8 @@
     ListProfiles, GetActiveProfileID, SetActiveProfile, AddManualProfile,
     AddSubscriptionProfile, RefreshProfile, DeleteProfile,
     ProfileConfigJSON, ProfileRaw, ProfileQR, ImportQRImage,
-  } from "../../wailsjs/go/main/App";
-  import { EventsOn, ClipboardSetText, ClipboardGetText } from "../../wailsjs/runtime/runtime";
+  } from "$api";
+  import { EventsOn, ClipboardSetText, ClipboardGetText } from "$api";
   import { connected, reportError, showToast, fmtDate } from "./store";
   import { t, tp, tr } from "./i18n";
   import { errText } from "./i18n/errors";

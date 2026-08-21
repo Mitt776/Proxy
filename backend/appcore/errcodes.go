@@ -37,6 +37,11 @@ const (
 	ErrQRNotFound      = "E_QR_NOTFOUND"       // на картинке нет QR-кода
 	ErrLangUnknown     = "E_LANG_UNKNOWN"      // запрошен неподдерживаемый язык
 
+	// Ошибки моста в WebView на Android. На Windows их нет: там методы биндит
+	// Wails, и несуществующий метод не собрался бы во фронтенде.
+	ErrNoMethod = "E_NO_METHOD" // метода нет в мобильной сборке
+	ErrBadArgs  = "E_BAD_ARGS"  // аргументы вызова не разобрались
+
 	ErrSetNotFound = "E_SET_NOT_FOUND" // набор правил не найден по ID
 	ErrSetNotList  = "E_SET_NOT_LIST"  // операция только для текстовых списков (.lst)
 	ErrSetFetch    = "E_SET_FETCH"     // список правил не скачался или оказался пустым

@@ -46,7 +46,23 @@ android {
     }
 }
 
+// Гео-наборы .srs ядру нужны файлами на диске. В git они не хранятся (как и на
+// Windows — лежат в архиве релиза), поэтому забираем их из корневых assets перед
+// упаковкой, а не держим вторую копию в дереве Android.
+val copyRuleSets = tasks.register<Copy>("copyRuleSets") {
+    from(rootProject.file("../assets")) { include("*.srs") }
+    into(layout.projectDirectory.dir("src/main/assets/rulesets"))
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(copyRuleSets) }
+
 dependencies {
     // mitm.aar — продукт gomobile bind, в git не хранится (см. .gitignore).
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+
+    // WebViewAssetLoader: интерфейс из ассетов APK отдаётся под https-происхождением.
+    // С file:// Chromium не грузит ES-модули (origin null режется CORS), и экран
+    // остаётся пустым без единой ошибки в логе.
+    implementation("androidx.webkit:webkit:1.14.0")
 }

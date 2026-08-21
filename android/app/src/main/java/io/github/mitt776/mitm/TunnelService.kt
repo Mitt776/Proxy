@@ -14,11 +14,14 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.util.Log
 import io.github.mitt776.mobile.Mobile
 import io.github.mitt776.mobile.Platform
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import kotlin.concurrent.thread
 
 /**
@@ -37,13 +40,85 @@ class TunnelService : VpnService(), Platform {
         const val ACTION_STOP = "io.github.mitt776.mitm.STOP"
         const val EXTRA_CONFIG = "config"
 
-        const val BROADCAST_STATE = "io.github.mitt776.mitm.STATE"
-        const val EXTRA_STATE = "state"
-        const val EXTRA_MESSAGE = "message"
-
         private const val TAG = "MitM"
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIFICATION_ID = 1
+
+        /** Текст уведомления: состояние и, когда есть, текущая скорость. */
+        @Volatile
+        private var notificationText: String = "Подключение…"
+
+        /** Обновить уведомление при смене состояния ядра (зовётся из Bridge). */
+        fun updateNotification(context: Context, state: String) {
+            notificationText = when (state) {
+                "running" -> "Подключено"
+                "starting" -> "Подключение…"
+                "error" -> "Ошибка подключения"
+                else -> return // остановились — уведомление снимет сам сервис
+            }
+            notify(context)
+        }
+
+        /** Обновить скорость в уведомлении. */
+        fun updateSpeed(context: Context, downSpeed: Long, upSpeed: Long) {
+            if (downSpeed == 0L && upSpeed == 0L) return
+            notificationText = "Подключено · ↓ ${speed(downSpeed)} ↑ ${speed(upSpeed)}"
+            notify(context)
+        }
+
+        private fun notify(context: Context) {
+            val manager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Уведомления нет, пока сервис не в foreground; тогда обновлять нечего.
+            runCatching { manager.notify(NOTIFICATION_ID, buildNotification(context, notificationText)) }
+        }
+
+        private fun buildNotification(context: Context, text: String): Notification {
+            val manager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, "MitM", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+
+            val openApp = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            val disconnect = PendingIntent.getService(
+                context,
+                1,
+                Intent(context, TunnelService::class.java).setAction(ACTION_STOP),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+
+            @Suppress("DEPRECATION")
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(context, CHANNEL_ID)
+            } else {
+                Notification.Builder(context)
+            }
+
+            return builder
+                .setContentTitle("MitM")
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_lock_lock)
+                .setContentIntent(openApp)
+                .setOngoing(true)
+                .addAction(
+                    Notification.Action.Builder(null, "Отключить", disconnect).build()
+                )
+                .build()
+        }
+
+        private fun speed(bytes: Long): String = when {
+            bytes >= 1024 * 1024 -> "%.1f МБ/с".format(bytes / 1024.0 / 1024.0)
+            bytes >= 1024 -> "%.0f КБ/с".format(bytes / 1024.0)
+            else -> "$bytes Б/с"
+        }
     }
 
     private var tunDescriptor: ParcelFileDescriptor? = null
@@ -85,20 +160,19 @@ class TunnelService : VpnService(), Platform {
 
     private fun startCore(config: String) {
         try {
-            Mobile.setup(filesDir.absolutePath, cacheDir.absolutePath)
+            // Слушать сеть начинаем до старта ядра: ему нужен внешний интерфейс уже
+            // на первом соединении.
             registerNetworkCallback()
-            Mobile.start(config, this)
-            broadcast("running", "")
+            Mobile.serviceStart(config, this)
         } catch (error: Throwable) {
             Log.e(TAG, "start core", error)
-            broadcast("error", error.message ?: error.toString())
             stopCore()
         }
     }
 
     private fun stopCore() {
         try {
-            Mobile.stop()
+            Mobile.serviceStop()
         } catch (error: Throwable) {
             Log.e(TAG, "stop core", error)
         }
@@ -107,7 +181,6 @@ class TunnelService : VpnService(), Platform {
         // дочитать очередь.
         tunDescriptor?.close()
         tunDescriptor = null
-        broadcast("stopped", "")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -226,6 +299,36 @@ class TunnelService : VpnService(), Platform {
         Log.i(TAG, message)
     }
 
+    /**
+     * Какое приложение открыло соединение. Ядро на Android спрашивает это всегда —
+     * не ответив, оно полезет в netlink, который Android запрещает, и журнал
+     * забьётся ошибками на каждом соединении.
+     */
+    override fun findConnectionOwner(
+        ipProtocol: Int,
+        sourceAddress: String,
+        sourcePort: Int,
+        destinationAddress: String,
+        destinationPort: Int,
+    ): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "{}"
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val uid = runCatching {
+            manager.getConnectionOwnerUid(
+                ipProtocol,
+                InetSocketAddress(InetAddress.getByName(sourceAddress), sourcePort),
+                InetSocketAddress(InetAddress.getByName(destinationAddress), destinationPort),
+            )
+        }.getOrDefault(Process.INVALID_UID)
+        if (uid == Process.INVALID_UID) return "{}"
+
+        val name = runCatching { packageManager.getPackagesForUid(uid)?.firstOrNull() }.getOrNull()
+        return JSONObject()
+            .put("uid", uid)
+            .put("package", name.orEmpty())
+            .toString()
+    }
+
     // --- смена сети ----------------------------------------------------------
 
     /**
@@ -295,45 +398,7 @@ class TunnelService : VpnService(), Platform {
     // --- уведомление ---------------------------------------------------------
 
     private fun startForegroundNotification() {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "MitM", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-
-        val openApp = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
-        @Suppress("DEPRECATION")
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            Notification.Builder(this)
-        }
-
-        val notification = builder
-            .setContentTitle("MitM")
-            .setContentText("Подключено")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentIntent(openApp)
-            .setOngoing(true)
-            .build()
-
-        startForeground(NOTIFICATION_ID, notification)
-    }
-
-    private fun broadcast(state: String, message: String) {
-        sendBroadcast(
-            Intent(BROADCAST_STATE)
-                .setPackage(packageName)
-                .putExtra(EXTRA_STATE, state)
-                .putExtra(EXTRA_MESSAGE, message)
-        )
+        startForeground(NOTIFICATION_ID, buildNotification(this, notificationText))
     }
 }
 

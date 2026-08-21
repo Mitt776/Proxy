@@ -36,11 +36,6 @@ import (
 // appName — имя приложения в заголовке окна, трее и уведомлениях Windows.
 const appName = "MitM"
 
-// AppVersion — версия приложения. Единственный источник правды для UI и трея;
-// при выпуске бампится здесь, в wails.json (блок `info.productVersion`, откуда её
-// берут свойства exe-файла) и в android/app/build.gradle.kts.
-const AppVersion = "2.0.2"
-
 // tunAutostartFlag передаётся перезапущенному с повышением прав процессу,
 // чтобы он сразу поднял TUN на активном профиле.
 const tunAutostartFlag = "--tun-autostart"
@@ -298,7 +293,7 @@ type AppInfo struct {
 // GetAppInfo возвращает информацию об окружении и версии ядра.
 func (a *App) GetAppInfo() AppInfo {
 	info := AppInfo{
-		AppVersion:  AppVersion,
+		AppVersion:  appcore.AppVersion,
 		State:       string(core.StateStopped),
 		IsAdmin:     system.IsAdmin(),
 		StartHidden: hasFlag(system.MinimizedFlag),

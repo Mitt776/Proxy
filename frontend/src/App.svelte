@@ -3,8 +3,8 @@
   // контента. Логика живёт в компонентах lib/ — здесь только раскладка,
   // первичная загрузка и переключение разделов.
   import { onMount } from "svelte";
-  import { GetAppInfo, GetActiveProfileID, ListProfiles } from "../wailsjs/go/main/App";
-  import { EventsOn } from "../wailsjs/runtime/runtime";
+  import { GetAppInfo, GetActiveProfileID, ListProfiles } from "$api";
+  import { EventsOn } from "$api";
   import "./lib/ui.css";
 
   import Splash from "./lib/shell/Splash.svelte";

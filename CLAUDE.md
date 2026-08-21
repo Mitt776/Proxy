@@ -88,10 +88,28 @@ cd ..\android
 **Слои.** Фронтенд (`frontend/src/App.svelte` — только раскладка и переключение разделов; вся
 логика в `frontend/src/lib/`) → биндинги Wails
 (`frontend/wailsjs/`, генерируются, в git не хранятся) → `App` в [app.go](app.go) — единственный
-объект, забинденный в JS; все публичные методы `App` = API для UI (наблюдаемость 1.3.0 —
-в [observe.go](observe.go), там же соединения, проверка домена и наборы правил). Ниже —
-`backend/*` пакеты,
+объект, забинденный в JS; все публичные методы `App` = API для UI. Ниже — `backend/*` пакеты,
 не знающие ни о Wails, ни друг о друге, кроме `profile → config → rules`.
+
+**`App` — тонкая оболочка.** Вся переносимая логика живёт в [backend/appcore/](backend/appcore/)
+и одинаково обслуживает Windows и Android; в `app.go`/[observe.go](observe.go) осталось только
+платформенное: системный прокси, UAC ради TUN, трей, автозапуск, выбор файла ядра, активные
+соединения и проверка домена (обе требуют ядра отдельным процессом). Переносимые методы
+продублированы в `App` однострочными делегатами — так у фронтенда остаётся прежняя поверхность
+биндинга.
+
+Платформа отдаёт ядру два интерфейса (`backend/appcore/core.go`):
+
+- `Host` — `Emit`, `Logf`, `ProfilesChanged`, `OnStats`, `DefaultLang`: всё, чего нет
+  одновременно и в Wails, и в Android.
+- `Runner` — `State`/`Check`/`Start`/`Restart`/`Stop`/`Logs`. Набор подобран так, что
+  `*core.Manager` подходит как есть; на Android его закрывает обёртка над библиотекой в
+  процессе (`mobile/runner_android.go`).
+
+**Логику не копировать в `mobile/`.** Из 1663 строк прежних `app.go`+`observe.go` платформенных
+было около 60 — остальное общее. Вторая копия `withRouting`, `applyRouting` и планировщика
+подписок разошлась бы молча, а обнаружил бы это пользователь. Инварианты закрыты тестами в
+`backend/appcore/core_test.go`.
 
 **Состав фронтенда (2.0.0).**
 
@@ -321,6 +339,50 @@ UAC-перезапуске ради TUN. Во-первых, elevated-проце�
   При этом разрез на две TCP-записи происходит при любой ненулевой паузе — замерено от 1 мс, —
   поэтому в конфиг зашиты `80ms` (`tlsFragmentFallbackDelay` в `route.go`). Ноль ставить нельзя:
   ядро считает его «не задано» и возвращается к своим 500 мс.
+
+## Android (порт, в работе)
+
+Раскладка: [mobile/](mobile/) — отдельный Go-модуль под `gomobile bind` (корневой тянет Wails,
+которому в APK делать нечего); [android/](android/) — Gradle-проект. Собирается
+[scripts/android-build.ps1](scripts/android-build.ps1).
+
+**Ядро — библиотека в процессе.** `/dev/net/tun` без рута недоступен, TUN выдаёт `VpnService`
+файловым дескриптором внутрь процесса приложения. Отсюда GPLv3 на Android-часть (см. «Лицензии»).
+`libbox` **не используем**: у форка он новой архитектуры (`CommandServer` + gRPC-демон ради
+общения с UI, которого у нас нет), вместо него своя реализация `adapter.PlatformInterface`
+в `mobile/platform_android.go`. Побочный выигрыш — из сборки выпали tailscale, openvpn, usbip.
+
+**Мост в WebView.** Wails на Android нет, поэтому вызов едет тройкой `(id, метод, аргументы
+JSON)` через `@JavascriptInterface`, а ответ возвращается в JS по тому же id
+(`Bridge.kt` ↔ `mobile/dispatch_android.go`). Мост **обязан быть асинхронным**: синхронный
+`@JavascriptInterface` блокирует поток WebView, а обновление подписки или тест задержки — это
+секунды с замершим интерфейсом. Общие компоненты фронтенда обращаются к Go только через алиас
+`$api`; какая реализация за ним (`api.desktop.ts` или `api.android.ts`) решает `vite.config.ts`
+по режиму сборки (`vite build --mode android`).
+
+Грабли, каждая из которых стоила пустого экрана или мёртвого соединения:
+
+- **`net.Interfaces()` не работает.** С Android 11 SELinux запрещает приложению netlink-сокет;
+  список интерфейсов обязан приходить из Kotlin (`java.net.NetworkInterface`, путь через ioctl).
+- **Следить нужно за не-VPN сетью** (`NetworkRequest` с `NET_CAPABILITY_NOT_VPN`), а не за
+  `registerDefaultNetworkCallback`: при поднятом туннеле активной системе видится наш же `tun0`,
+  и ядро отвечает «no available network interface» на каждое соединение.
+- **`FindConnectionOwner` реализовать обязательно.** Ядро на Android включает поиск процесса
+  всегда, когда есть платформенный слой; без ответа оно лезет в запрещённый netlink и сыплет
+  в журнал ошибку на каждом соединении.
+- **Проверке конфига тоже нужен платформенный слой** (`checkStub`), хотя она ничего не
+  запускает: иначе ядро при сборке box заводит свой монитор сети и падает на netlink.
+- **Интерфейс отдаётся под `https://appassets.androidplatform.net`** через `WebViewAssetLoader`.
+  С `file://` Chromium не грузит ES-модули (origin `null` режется CORS) — пустой экран без
+  единой ошибки в логе. Плюс `base: './'` в конфиге vite: абсолютный `/assets/…` уехал бы мимо
+  каталога `web/`.
+- **Kotlin в AGP 9 встроенный** — плагин `org.jetbrains.kotlin.android` применять нельзя.
+- **`.ps1` с кириллицей сохранять в UTF-8 с BOM**: Windows PowerShell 5.1 иначе читает файл как
+  ANSI и падает на разборе.
+
+Сабмодули форка (`wireguard-go`) в zip Go-модуля не попадают, а `protocol/masque` тянет
+`transport/wireguard` даже с выключенным `with_wireguard` — отсюда клон и filesystem-replace
+в [scripts/android-deps.ps1](scripts/android-deps.ps1).
 
 ## Два ядра / XHTTP
 

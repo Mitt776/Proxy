@@ -7,3 +7,5 @@ app/libs/*.jar
 .idea/
 *.iml
 .cxx/
+app/src/main/assets/rulesets/
+app/src/main/assets/web/

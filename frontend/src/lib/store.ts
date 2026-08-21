@@ -2,8 +2,8 @@
 // друг другу пропсы через всю иерархию: состояние ядра и всплывающие
 // сообщения нужны почти каждому компоненту.
 import { derived, writable } from "svelte/store";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
-import { GetStatus } from "../../wailsjs/go/main/App";
+import { EventsOn } from "$api";
+import { GetStatus } from "$api";
 import { errText } from "./i18n/errors";
 import { lang } from "./i18n";
 

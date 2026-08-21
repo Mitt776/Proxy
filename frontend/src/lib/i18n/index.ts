@@ -3,7 +3,7 @@
 // сменить язык. Смена работает на лету: `lang` — обычный writable, Svelte сам
 // перерисовывает всё, что читает `$t`, перезагрузка окна не нужна.
 import { derived, get, writable } from "svelte/store";
-import { SetLanguage } from "../../../wailsjs/go/main/App";
+import { SetLanguage } from "$api";
 import { ru } from "./ru";
 import { en } from "./en";
 

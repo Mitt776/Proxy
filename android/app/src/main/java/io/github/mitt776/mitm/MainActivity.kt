@@ -1,154 +1,105 @@
 package io.github.mitt776.mitm
 
 import android.app.Activity
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.net.VpnService
-import android.os.Build
+import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
-import android.text.InputType
-import android.view.Gravity
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
-import io.github.mitt776.mobile.Mobile
-import kotlin.concurrent.thread
+import android.util.Log
+import android.view.ViewGroup
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.webkit.WebViewAssetLoader
 
 /**
- * Экран этапа 0. Интерфейса здесь нет намеренно: единственная задача — доказать, что
- * связка «наш парсер → наш генератор → sing-box в процессе → VpnService» пропускает
- * настоящий трафик. Ссылка на ноду вводится руками и никуда не сохраняется — в коде и в
- * репозитории её быть не должно.
+ * Окно приложения — один WebView с тем же интерфейсом, что и на Windows.
+ *
+ * Логика и состояние живут в Go и переживают пересоздание Activity: ядро подняли в
+ * MitmApp, а туннель держит foreground-сервис. Поэтому здесь только вёрстка окна и
+ * системный диалог согласия на VPN — его показывает только Activity.
  */
 class MainActivity : Activity() {
 
-    private lateinit var linkInput: EditText
-    private lateinit var status: TextView
-    private var pendingConfig: String? = null
-
-    private val stateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val state = intent?.getStringExtra(TunnelService.EXTRA_STATE).orEmpty()
-            val message = intent?.getStringExtra(TunnelService.EXTRA_MESSAGE).orEmpty()
-            status.text = if (message.isEmpty()) state else "$state: $message"
-        }
-    }
+    private lateinit var webView: WebView
+    private val bridge get() = MitmApp.instance.bridge
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        Mobile.setup(filesDir.absolutePath, cacheDir.absolutePath)
-
-        linkInput = EditText(this).apply {
-            hint = "vless://..."
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            setSingleLine(false)
-            maxLines = 4
-            // Чтобы не набирать ссылку руками при отладке:
-            //   adb shell am start -n io.github.mitt776.mitm/.MainActivity --es link "vless://..."
-            // Ссылка живёт только в поле ввода — ни в коде, ни в файлах её нет.
-            intent?.getStringExtra("link")?.let { setText(it) }
-        }
-        status = TextView(this).apply {
-            text = if (Mobile.isRunning()) "running" else "stopped"
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-
-        val connect = Button(this).apply {
-            text = "Подключить"
-            setOnClickListener { connect() }
-        }
-        val disconnect = Button(this).apply {
-            text = "Отключить"
-            setOnClickListener {
-                startService(Intent(this@MainActivity, TunnelService::class.java).setAction(TunnelService.ACTION_STOP))
+        webView = WebView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            // Тот же фон, что у токена --bg: иначе на старте мигает белым.
+            setBackgroundColor(Color.parseColor("#0E0A1A"))
+            // Интерфейс отдаётся из ассетов APK под https-происхождением, а не с
+            // file://. Иначе Chromium отказывается грузить ES-модули (origin у
+            // file:// — null, и модуль блокируется CORS), и получается пустой экран
+            // без единой ошибки в логе.
+            val assetLoader = WebViewAssetLoader.Builder()
+                .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this@MainActivity))
+                .build()
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest,
+                ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
             }
+            // Консоль интерфейса — в logcat. Иначе ошибка в JS выглядит как
+            // просто не отрисовавшийся экран, и искать её нечем.
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                    Log.i(TAG, "web: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+                    return true
+                }
+            }
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            // Интерфейс лежит в ассетах APK; читать что-то ещё с диска ему незачем.
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            addJavascriptInterface(bridge.native, "MitMNative")
         }
+        setContentView(webView)
 
-        setContentView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 96, 48, 48)
-            addView(linkInput)
-            addView(connect)
-            addView(disconnect)
-            addView(status)
-        })
+        bridge.attach(webView, this)
 
-        // Отладочный автозапуск, чтобы не тыкать в кнопку руками:
-        //   adb shell am start -n io.github.mitt776.mitm/.MainActivity --es link "..." --ez autoconnect true
-        if (intent?.getBooleanExtra("autoconnect", false) == true) {
-            connect()
+        // Отладочная передача ссылки на ноду, чтобы не набирать её на телефоне:
+        //   adb shell am start -n .../.MainActivity --es link "vless://…"
+        // Ссылка доезжает до поля ввода и нигде не сохраняется.
+        val link = intent?.getStringExtra("link")
+        val url = buildString {
+            append("https://appassets.androidplatform.net/assets/web/mobile.html")
+            if (!link.isNullOrEmpty()) append("?link=").append(Uri.encode(link))
         }
-
-        val filter = IntentFilter(TunnelService.BROADCAST_STATE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(stateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(stateReceiver, filter)
-        }
+        webView.loadUrl(url)
     }
 
     override fun onDestroy() {
-        runCatching { unregisterReceiver(stateReceiver) }
+        bridge.detach(this)
         super.onDestroy()
     }
 
-    private fun connect() {
-        val link = linkInput.text.toString().trim()
-        if (link.isEmpty()) {
-            status.text = "введи ссылку на ноду"
-            return
-        }
-        status.text = "собираю конфиг…"
-        thread(name = "mitm-config") {
-            val config = runCatching { Mobile.spikeConfig(link) }
-            runOnUiThread {
-                config.onFailure { status.text = "конфиг: ${it.message}" }
-                config.onSuccess { generated ->
-                    pendingConfig = generated
-                    // Согласие на VPN спрашивает система; при повторном запуске prepare
-                    // вернёт null и диалога не будет.
-                    val consent = VpnService.prepare(this)
-                    if (consent != null) {
-                        startActivityForResult(consent, REQUEST_VPN)
-                    } else {
-                        startTunnel()
-                    }
-                }
-            }
-        }
+    /** Показать системный диалог согласия на VPN (пришло из Go через Bridge). */
+    fun requestVpnConsent(intent: Intent) {
+        runOnUiThread { startActivityForResult(intent, REQUEST_VPN) }
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_VPN) return
-        if (resultCode == RESULT_OK) {
-            startTunnel()
-        } else {
-            status.text = "нет разрешения на VPN"
-        }
-    }
-
-    private fun startTunnel() {
-        val config = pendingConfig ?: return
-        pendingConfig = null
-        status.text = "запускаю ядро…"
-        val intent = Intent(this, TunnelService::class.java)
-            .setAction(TunnelService.ACTION_START)
-            .putExtra(TunnelService.EXTRA_CONFIG, config)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        if (requestCode == REQUEST_VPN) {
+            bridge.onVpnConsent(resultCode == RESULT_OK)
         }
     }
 
     private companion object {
+        const val TAG = "MitM"
         const val REQUEST_VPN = 1
     }
 }

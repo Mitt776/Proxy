@@ -2,7 +2,7 @@
   // Собственная шапка окна: у нас Frameless, системной рамки нет. Полоса помечена
   // --wails-draggable, поэтому окно таскается за неё; кнопки внутри полосы этот
   // атрибут сбрасывают, иначе клик по ним считался бы началом перетаскивания.
-  import { Quit, WindowMinimise } from "../../../wailsjs/runtime/runtime";
+  import { Quit, WindowMinimise } from "$api";
   import Icon from "../icons/Icon.svelte";
   import LogoMark from "./LogoMark.svelte";
   import { lang, setLang, t, type Lang } from "../i18n";

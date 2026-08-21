@@ -3,8 +3,8 @@
   // Уровень ядра (что оно вообще пишет) — отдельная настройка: её смена
   // перезапускает ядро, поэтому она внизу и подписана явно.
   import { onMount } from "svelte";
-  import { GetLogs, GetLogLevel, SetLogLevel } from "../../wailsjs/go/main/App";
-  import { EventsOn, ClipboardSetText } from "../../wailsjs/runtime/runtime";
+  import { GetLogs, GetLogLevel, SetLogLevel } from "$api";
+  import { EventsOn, ClipboardSetText } from "$api";
   import Icon from "./icons/Icon.svelte";
   import TabHead from "./shell/TabHead.svelte";
   import { showToast, reportError } from "./store";
