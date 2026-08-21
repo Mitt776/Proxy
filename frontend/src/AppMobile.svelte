@@ -4,7 +4,6 @@
   // раскладка и переключение разделов, вся логика в lib/.
   import { onMount } from "svelte";
   import {
-    AddManualProfile,
     EventsOn,
     GetAppInfo,
     GetActiveProfileID,
@@ -17,8 +16,12 @@
   import Drawer from "./lib/mobile/Drawer.svelte";
   import ConnectScreenMobile from "./lib/mobile/ConnectScreenMobile.svelte";
   import ProfilesTabMobile from "./lib/mobile/ProfilesTabMobile.svelte";
+  import RulesTabMobile from "./lib/mobile/RulesTabMobile.svelte";
   import SettingsTabMobile from "./lib/mobile/SettingsTabMobile.svelte";
-  import Soon from "./lib/mobile/Soon.svelte";
+  // Журнал переиспользуется с Windows целиком: строки те же, фильтр работает
+  // поверх кольцевого буфера в Go, а узкий экран лечится медиазапросом внутри
+  // самой вкладки.
+  import LogsTab from "./lib/LogsTab.svelte";
   import Icon from "./lib/icons/Icon.svelte";
   import type { MobileTab } from "./lib/shell/tabs";
 
@@ -48,7 +51,6 @@
     EventsOn("update:available", (u: { version: string; url: string }) => (update = u));
 
     await initStore();
-    await importDebugLink();
     await loadProfile();
     EventsOn("profiles:changed", loadProfile);
 
@@ -92,24 +94,6 @@
     return true;
   }
 
-  /**
-   * Временный костыль порта: настоящего импорта профилей ещё нет (этап 3), а
-   * набирать ссылку `vless://` пальцем на телефоне невозможно. Ссылка приходит
-   * отладочной intent-экстрой и только в debug-сборке — см. MainActivity.startUrl().
-   * Удалить вместе с параметром, когда появятся импорт из буфера и QR.
-   */
-  async function importDebugLink() {
-    const link = new URLSearchParams(location.search).get("link");
-    if (!link) return;
-    // Из адреса убираем сразу: перезагрузка страницы не должна заводить дубль.
-    history.replaceState(null, "", location.pathname);
-    try {
-      await AddManualProfile("", link);
-    } catch (e) {
-      console.error("отладочный импорт:", e);
-    }
-  }
-
   async function loadProfile() {
     const [list, activeId] = await Promise.all([ListProfiles(), GetActiveProfileID()]);
     const p = (list || []).find((x: { id: string }) => x.id === activeId);
@@ -137,9 +121,12 @@
     {:else if tab === "profiles"}
       <ProfilesTabMobile />
     {:else if tab === "routing"}
-      <Soon icon="route" title={$t("tab.routing")} />
+      <RulesTabMobile />
     {:else if tab === "logs"}
-      <Soon icon="terminal" title={$t("tab.logs")} />
+      <!-- Вкладка построена как каркас с растягивающимся телом (.tab-wrap), и
+           ей нужна заданная высота: без обёртки список строк не прокручивался
+           бы сам, а растил бы страницу. -->
+      <div class="fill"><LogsTab /></div>
     {:else}
       <SettingsTabMobile appVersion={version} {coreVersion} {dataDir} />
     {/if}
@@ -178,6 +165,13 @@
     padding-bottom: var(--safe-bottom);
     padding-left: var(--safe-left);
     padding-right: var(--safe-right);
+  }
+
+  .fill {
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    padding: var(--s-4) var(--s-3) var(--s-3);
   }
 
   /* Полоска обновления — над содержимым, а не поверх него: она появляется редко

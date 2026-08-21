@@ -167,6 +167,8 @@ type platformLogWriter struct {
 }
 
 func (w *platformLogWriter) WriteMessage(level log.Level, message string) {
+	// Цвет ядро ставит всегда — см. stripANSI.
+	message = stripANSI(message)
 	w.platform.kt.WriteLog(int32(level), message)
 	if w.onLog != nil {
 		w.onLog(message)

@@ -1,7 +1,6 @@
 <script lang="ts">
   // Форма одного правила: что ловим, что с этим делаем и куда шлём.
   import { createEventDispatcher } from "svelte";
-  import ProcessPicker from "./ProcessPicker.svelte";
   import Icon from "./icons/Icon.svelte";
   import { t } from "./i18n";
   import type { rules } from "../../wailsjs/go/models";
@@ -10,6 +9,16 @@
   export let groups: rules.Group[] = [];
   // Удалённые наборы правил из routing.json — показываем рядом со встроенными.
   export let ruleSets: rules.RuleSet[] = [];
+
+  /**
+   * Пикер процессов — компонентом снаружи, а не импортом здесь.
+   *
+   * Он весь на WinAPI (`ListProcesses`), которого в мобильном мосте нет вовсе, и
+   * обычный import утащил бы его в сборку APK — та не собралась бы на пропавшем
+   * экспорте. Заодно один этот проп решает и вторую половину дела: без него
+   * пропадают матчеры по процессу, которых на Android всё равно нет.
+   */
+  export let processPicker: any = null;
 
   const dispatch = createEventDispatcher<{ save: rules.Rule; cancel: void }>();
 
@@ -34,7 +43,15 @@
     protocol: "quic",
     network: "udp",
   };
-  const matches = Object.keys(placeholders);
+  const allMatches = Object.keys(placeholders);
+  const processMatches = ["process", "processPath"];
+
+  // Уже выбранный матчер оставляем в списке всегда: правило могло приехать из
+  // routing.json, написанного на другой платформе, и пустой select в форме
+  // выглядел бы как потерянная настройка.
+  $: matches = allMatches.filter(
+    (m) => processPicker || !processMatches.includes(m) || draft.match === m,
+  );
 
   // Встроенные наборы лежат в assets готовыми .srs — их подписи переводятся,
   // добавленные пользователем показываются своим тегом.
@@ -131,7 +148,7 @@
                         placeholder={placeholders[draft.match] || ""} bind:value={valuesText}></textarea>
               <div class="hint">{$t("editor.valuesHint")}</div>
             {/if}
-            {#if draft.match === "process" || draft.match === "processPath"}
+            {#if processPicker && (draft.match === "process" || draft.match === "processPath")}
               <button class="btn sm" on:click={() => (showPicker = true)}>
                 <Icon name="folder" size={13} />{$t("editor.pickProcess")}
               </button>
@@ -188,9 +205,9 @@
   </div>
 </div>
 
-{#if showPicker}
-  <ProcessPicker selected={valuesText.split("\n").filter(Boolean)}
-                 on:apply={applyProcesses} on:close={() => (showPicker = false)} />
+{#if showPicker && processPicker}
+  <svelte:component this={processPicker} selected={valuesText.split("\n").filter(Boolean)}
+                    on:apply={applyProcesses} on:close={() => (showPicker = false)} />
 {/if}
 
 <style>
@@ -224,4 +241,14 @@
 
   .frag { padding-top: 7px; align-items: flex-start; line-height: 1.45; }
   .frag .note { display: block; margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+
+  /* На телефоне колонка подписей съедает четверть ширины, и в поле значений не
+     помещается даже домен средней длины — там форма складывается в столбик. */
+  @media (max-width: 560px) {
+    .row { flex-direction: column; gap: 4px; }
+    .lbl { width: auto; padding-top: 0; }
+    /* box-sizing обязателен: у .fld свои 12 px отступа с каждой стороны, и без
+       него поле на 100% ширины вылезает за модалку вместе с полосой прокрутки. */
+    .row > .fld, .vals { width: 100%; box-sizing: border-box; }
+  }
 </style>

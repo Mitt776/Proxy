@@ -94,7 +94,7 @@ class MainActivity : Activity() {
 
         bridge.attach(webView, this)
         askForNotifications()
-        webView.loadUrl(startUrl())
+        webView.loadUrl(PAGE_URL)
     }
 
     /**
@@ -128,8 +128,14 @@ class MainActivity : Activity() {
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
+            // Клавиатура идёт снизу тем же отступом. Окно у нас во весь экран и
+            // само не сжимается, поэтому без этого экранная клавиатура накрывает
+            // низ модального окна — вместе с кнопкой «Сохранить», ради которой
+            // пользователь и открыл форму.
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
             val d = resources.displayMetrics.density
             fun px(v: Int) = (v / d).toInt()
+            val bottom = maxOf(bars.bottom, ime)
             webView.evaluateJavascript(
                 // Проверка на null не лишняя: инсеты прилетают и во время самой
                 // навигации, когда старый документ уже снесён, а нового ещё нет,
@@ -138,7 +144,7 @@ class MainActivity : Activity() {
                 (function(e){
                   if (!e) return;
                   e.style.setProperty('--safe-top', '${px(bars.top)}px');
-                  e.style.setProperty('--safe-bottom', '${px(bars.bottom)}px');
+                  e.style.setProperty('--safe-bottom', '${px(bottom)}px');
                   e.style.setProperty('--safe-left', '${px(bars.left)}px');
                   e.style.setProperty('--safe-right', '${px(bars.right)}px');
                 })(document.documentElement)
@@ -150,17 +156,6 @@ class MainActivity : Activity() {
         // Первую раздачу инсетов система могла провести до того, как слушатель
         // повесили, — просим её повторить.
         ViewCompat.requestApplyInsets(webView)
-    }
-
-    private fun startUrl(): String {
-        val url = "https://appassets.androidplatform.net/assets/web/mobile.html"
-        // Отладочная передача ссылки на ноду, чтобы не набирать её на телефоне:
-        //   adb shell am start -n .../.MainActivity --es link "vless://…"
-        // Только в отладочной сборке: в релизе такого входа быть не должно.
-        // Ссылка доезжает до интерфейса и нигде не сохраняется.
-        if (!BuildConfig.DEBUG) return url
-        val link = intent?.getStringExtra("link")
-        return if (link.isNullOrEmpty()) url else "$url?link=${Uri.encode(link)}"
     }
 
     override fun onDestroy() {
@@ -310,6 +305,14 @@ class MainActivity : Activity() {
 
     private companion object {
         const val TAG = "MitM"
+
+        /**
+         * Интерфейс отдаётся под https-происхождением через WebViewAssetLoader:
+         * с file:// Chromium режет ES-модули по CORS, и экран остаётся пустым
+         * без единой ошибки в журнале.
+         */
+        const val PAGE_URL = "https://appassets.androidplatform.net/assets/web/mobile.html"
+
         const val REQUEST_VPN = 1
         const val REQUEST_NOTIFY = 2
         const val REQUEST_QR_IMAGE = 3

@@ -11,6 +11,7 @@
   } from "$api";
   import { EventsOn } from "$api";
   import RuleEditor from "./RuleEditor.svelte";
+  import ProcessPicker from "./ProcessPicker.svelte";
   import DomainCheck from "./DomainCheck.svelte";
   import Icon from "./icons/Icon.svelte";
   import TabHead from "./shell/TabHead.svelte";
@@ -369,7 +370,10 @@
 {/if}
 
 {#if editing}
+  <!-- Пикер процессов отдаём редактору отсюда: он на WinAPI, и в мобильной
+       сборке этого компонента не существует. -->
   <RuleEditor rule={editing} groups={cfg.groups} ruleSets={cfg.ruleSets || []}
+              processPicker={ProcessPicker}
               on:save={saveRule} on:cancel={() => (editing = null)} />
 {/if}
 

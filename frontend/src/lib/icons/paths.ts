@@ -31,6 +31,10 @@ export const paths = {
   close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   check: '<path d="m4 12 5 5L20 6"/>',
   chevronRight: '<path d="m9 5 7 7-7 7"/>',
+  // Перестановка правил на телефоне: перетаскивания там нет, приоритет меняется
+  // этими двумя кнопками.
+  arrowUp: '<path d="M12 20V5"/><path d="m5 12 7-7 7 7"/>',
+  arrowDown: '<path d="M12 4v15"/><path d="m19 12-7 7-7-7"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   drag: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',

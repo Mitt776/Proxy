@@ -27,12 +27,6 @@ android {
         }
     }
 
-    buildFeatures {
-        // BuildConfig.DEBUG отличает отладочную сборку от релизной: отладочный
-        // вход для ссылки на ноду в релиз попадать не должен (MainActivity.startUrl).
-        buildConfig = true
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = false

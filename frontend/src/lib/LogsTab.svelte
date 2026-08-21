@@ -178,6 +178,17 @@
   .line.error { color: var(--danger); }
   .line.debug, .line.trace { color: var(--muted); }
 
+  /* На телефоне шесть чипов уровня и поле поиска в одну строку не встают —
+     поиск уезжает на свою. Вкладка общая с Windows, поэтому не «мобильный
+     режим», а обычная ширина: в узком окне на ПК проблема ровно та же. */
+  @media (max-width: 560px) {
+    .bar { flex-wrap: wrap; }
+    .chips { flex-wrap: wrap; }
+    /* box-sizing обязателен: у .fld свои отступы, и поле на всю строку иначе
+       вылезает за край экрана вместе с горизонтальной полосой прокрутки. */
+    .bar .fld { flex: 1 0 100%; box-sizing: border-box; }
+  }
+
   .foot { display: flex; align-items: center; gap: var(--s-2); flex: none; }
   .grow { flex: 1; min-width: 0; }
   .foot .lvl { flex: none; width: auto; font-size: 12px; padding: 4px 8px; }

@@ -209,6 +209,10 @@ select.fld { cursor: pointer; padding: 7px 10px; }
 }
 .segmented button:hover:not(.on) { color: var(--text); }
 .segmented button.on { background: var(--accent); color: #fff; }
+/* Во всю ширину строки: на телефоне переключатель режимов занимает её целиком,
+   и доли должны быть равными, а не по длине надписи. */
+.segmented.wide { display: flex; }
+.segmented.wide button { flex: 1; }
 
 /* Тумблер */
 .toggle {
@@ -312,6 +316,12 @@ select.fld { cursor: pointer; padding: 7px 10px; }
 .tab-head .ttl { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
 .tab-head .sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
 .tab-head .tools { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
+/* Узкий экран: кнопки раздела уходят под заголовок, иначе на телефоне «Журнал»
+   выталкивает их за край. */
+@media (max-width: 560px) {
+  .tab-head { flex-wrap: wrap; }
+  .tab-head .tools { margin-left: 0; width: 100%; }
+}
 
 /* Строка списка: сплошная поверхность с разделителями вместо россыпи карточек —
    так десятки правил и соединений читаются как таблица, а не как мозаика. */
