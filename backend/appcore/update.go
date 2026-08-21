@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -150,9 +151,29 @@ func (c *Core) fetchUpdate(ctx context.Context) (UpdateInfo, error) {
 	return UpdateInfo{
 		Available: newerVersion(latest, AppVersion),
 		Version:   latest,
-		URL:       rel.HTMLURL,
+		URL:       releasePageURL(rel.HTMLURL),
 		Notes:     rel.Body,
 	}, nil
+}
+
+// releasePageURL проверяет адрес выпуска, приехавший в ответе GitHub.
+//
+// По этой ссылке пользователь уходит одним нажатием, и приложение отдаёт её
+// системе — то есть содержимое чужого ответа определяет, что откроется. Ответ
+// приходит по TLS от api.github.com, так что подменить его непросто, но цена
+// проверки — три строки, а цена ошибки — открытая по нашей команде произвольная
+// ссылка. Всё, что не похоже на страницу релиза на github.com, заменяем на
+// список выпусков: он всегда ведёт куда надо.
+func releasePageURL(raw string) string {
+	const fallback = "https://github.com/Mitt776/Proxy/releases"
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" {
+		return fallback
+	}
+	if host := strings.ToLower(u.Hostname()); host != "github.com" && !strings.HasSuffix(host, ".github.com") {
+		return fallback
+	}
+	return u.String()
 }
 
 // newerVersion сравнивает версии вида «2.1.0» покомпонентно.

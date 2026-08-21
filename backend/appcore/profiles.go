@@ -52,6 +52,12 @@ func (c *Core) AddSubscriptionProfile(name, url string) (*profile.Profile, error
 	if c.profiles == nil {
 		return nil, CodedErr(ErrNotReady, "хранилище не готово")
 	}
+	// Отказ по http ловим здесь, а не только в config.FetchSubscription: там он
+	// тоже стоит (единственная точка для планировщика), но ошибка без кода
+	// приехала бы в интерфейс непереведённой.
+	if err := config.ValidateSubscriptionURL(url); err != nil {
+		return nil, CodedErrf(ErrInsecureURL, "%w", err)
+	}
 	p, err := c.profiles.AddSubscription(c.ctx, name, url)
 	if err == nil {
 		c.profilesChanged()
@@ -63,6 +69,13 @@ func (c *Core) AddSubscriptionProfile(name, url string) (*profile.Profile, error
 func (c *Core) RefreshProfile(id string) (*profile.Profile, error) {
 	if c.profiles == nil {
 		return nil, CodedErr(ErrNotReady, "хранилище не готово")
+	}
+	// Профиль мог быть заведён до запрета http — тогда обновление отказывает с
+	// объяснением, а не молча тянет подписку по открытому каналу.
+	if p := c.profiles.Get(id); p != nil && p.SubURL != "" {
+		if err := config.ValidateSubscriptionURL(p.SubURL); err != nil {
+			return nil, CodedErrf(ErrInsecureURL, "%w", err)
+		}
 	}
 	p, err := c.profiles.Refresh(c.ctx, id)
 	if err == nil {

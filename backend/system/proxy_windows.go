@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"syscall"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -182,8 +182,15 @@ func readBackup(k registry.Key) proxyBackup {
 
 // notifyWinInet сообщает системе, что настройки прокси изменились,
 // чтобы браузеры и WinINet-приложения подхватили их без перезапуска.
+//
+// NewLazySystemDLL, а не syscall.NewLazyDLL: последний идёт обычным порядком
+// поиска, где каталог приложения стоит впереди System32. wininet.dll в список
+// KnownDLLs не входит, то есть подложенная рядом с exe копия загрузилась бы
+// вместо системной — а при TUN мы работаем с правами администратора из
+// портативного каталога, куда пишет любой пользователь. Системный вариант
+// заставляет LOAD_LIBRARY_SEARCH_SYSTEM32 и закрывает подмену.
 func notifyWinInet() {
-	wininet := syscall.NewLazyDLL("wininet.dll")
+	wininet := windows.NewLazySystemDLL("wininet.dll")
 	setOption := wininet.NewProc("InternetSetOptionW")
 	const (
 		INTERNET_OPTION_SETTINGS_CHANGED = 39

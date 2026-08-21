@@ -116,7 +116,7 @@ func shellExecuteRunAs(exe, params, dir string) error {
 	}
 	const SW_SHOWNORMAL = 1
 
-	shell32 := syscall.NewLazyDLL("shell32.dll")
+	shell32 := windows.NewLazySystemDLL("shell32.dll")
 	proc := shell32.NewProc("ShellExecuteW")
 	ret, _, _ := proc.Call(
 		0,

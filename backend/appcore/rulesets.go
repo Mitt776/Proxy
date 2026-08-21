@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"Proxy/backend/config"
@@ -26,6 +27,9 @@ func (c *Core) ListRuleSets() []rules.RuleSet {
 // Как и правки правил, идёт через withRouting: не принятый ядром набор
 // откатывается, а не остаётся висеть в routing.json.
 func (c *Core) AddRuleSet(rs rules.RuleSet) (string, error) {
+	if err := requireSecureSetURL(rs); err != nil {
+		return "", err
+	}
 	// Список качаем до записи в routing.json: битый адрес должен вернуть ошибку
 	// сразу, а не превратиться в набор, который ядро молча проигнорирует.
 	if err := c.syncListSet(rs); err != nil {
@@ -44,8 +48,36 @@ func (c *Core) AddRuleSet(rs rules.RuleSet) (string, error) {
 	return id, nil
 }
 
+// requireSecureSetURL отвергает удалённый набор правил, заданный по http.
+//
+// Набор решает, что пойдёт мимо туннеля. Подменив список по дороге, посредник
+// добавляет в «напрямую» ровно те домены, ради которых туннель и поднимали, —
+// внешне ничего не меняется, а трафик по ним идёт открыто. Поэтому источник
+// обязан быть по https.
+//
+// Проверка стоит на добавлении и правке, а не в rules.RuleSet.Validate: тот
+// валидирует конфиг целиком при каждом сохранении, и набор, заведённый по http
+// в прошлых версиях, заблокировал бы вообще любую правку правил.
+func requireSecureSetURL(rs rules.RuleSet) error {
+	if rs.Type != rules.SetRemote {
+		return nil // локальный .srs из каталога ассетов — качать нечего
+	}
+	u, err := url.Parse(strings.TrimSpace(rs.URL))
+	if err != nil || u.Host == "" {
+		return CodedErrf(ErrInsecureURL, "адрес набора не разобрался: %q", rs.URL)
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return CodedErrf(ErrInsecureURL,
+			"набор правил по %s небезопасен — список подменяется по пути, нужен https", u.Scheme)
+	}
+	return nil
+}
+
 // UpdateRuleSet заменяет описание набора.
 func (c *Core) UpdateRuleSet(rs rules.RuleSet) error {
+	if err := requireSecureSetURL(rs); err != nil {
+		return err
+	}
 	prev := c.findRuleSetByID(rs.ID)
 	if err := c.syncListSet(rs); err != nil {
 		return err

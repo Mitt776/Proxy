@@ -2,6 +2,8 @@ module Proxy/mobile
 
 go 1.25.5
 
+toolchain go1.26.6
+
 require (
 	Proxy v0.0.0-00010101000000-000000000000
 	github.com/sagernet/sing v0.9.0-beta.2

@@ -369,4 +369,7 @@ export const en: Record<string, string> = {
   "err.E_SET_NOT_FOUND": "Rule set not found",
   "err.E_SET_NOT_LIST": "Only plain .lst lists can be refreshed by hand",
   "err.E_SET_FETCH": "Could not download the list",
+  "err.E_INSECURE_URL": "An https address is required: over http the content can be swapped in transit",
+  "err.E_INTERNAL": "Internal error",
+  "err.E_UPDATE_CHECK": "Could not check for updates",
 };

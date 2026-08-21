@@ -6,12 +6,50 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
+// ValidateSubscriptionURL отвергает адрес подписки без TLS.
+//
+// Подписка — это точка, из которой приложение узнаёт, куда отправлять весь
+// трафик пользователя. По http её содержимое подменяет кто угодно на пути
+// (в первую очередь тот самый провайдер, от которого и защищаемся): в ответ
+// приезжает своя нода, при желании со `skip-cert-verify`, и трафик едет через
+// чужой сервер, а интерфейс показывает штатное «подключено». Проверять
+// сертификаты нод бессмысленно, если сам список нод приехал открытым текстом.
+//
+// Схема сверяется до запроса, потому что перехваченный ответ уже поздно
+// разбирать.
+func ValidateSubscriptionURL(subURL string) error {
+	u, err := url.Parse(strings.TrimSpace(subURL))
+	if err != nil {
+		return fmt.Errorf("адрес подписки не разобрался: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		if u.Host == "" {
+			return fmt.Errorf("в адресе подписки нет хоста")
+		}
+		return nil
+	case "http":
+		return fmt.Errorf("подписка по http небезопасна — содержимое подменяется по пути, нужен https")
+	case "":
+		return fmt.Errorf("нужен https-адрес подписки, получено %q", subURL)
+	default:
+		return fmt.Errorf("подписка поддерживает только https, получено %q", u.Scheme)
+	}
+}
+
 // FetchSubscription скачивает тело подписки по URL.
 func FetchSubscription(ctx context.Context, subURL string) ([]byte, error) {
+	// Проверка стоит здесь, а не только у вызывающих: через эту функцию идут и
+	// добавление профиля, и ручное обновление, и тик планировщика подписок, —
+	// а забыть её в одном из трёх мест ничего не мешает.
+	if err := ValidateSubscriptionURL(subURL); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", subURL, nil)
 	if err != nil {
 		return nil, err

@@ -68,6 +68,30 @@ class MainActivity : Activity() {
                     request: WebResourceRequest,
                 ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
 
+                /**
+                 * Уходить с локального origin этому WebView запрещено.
+                 *
+                 * В нём висит мост MitMNative, а @JavascriptInterface достаётся
+                 * любой странице, которая в WebView окажется, — не только нашей.
+                 * То есть одна навигация на внешний адрес (ссылка в будущем
+                 * интерфейсе, редирект, iframe) отдала бы чужому коду профили с
+                 * учётными данными и управление туннелем целиком.
+                 *
+                 * Поэтому всё, что не наш ассет-хост, уходит во внешний браузер,
+                 * а сам WebView остаётся на приложении. Проверять надо и хост, и
+                 * схему: http://appassets.androidplatform.net — чужой адрес в
+                 * интернете, совпадающий с нашим по имени.
+                 */
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest,
+                ): Boolean {
+                    val url = request.url
+                    if (url.scheme == "https" && url.host == ASSET_HOST) return false
+                    bridge.openExternal(url)
+                    return true
+                }
+
                 // Переменные с отступами живут в DOM, а DOM только что заменили
                 // загрузкой страницы — просим систему раздать инсеты заново.
                 override fun onPageFinished(view: WebView, url: String) {
@@ -311,7 +335,8 @@ class MainActivity : Activity() {
          * с file:// Chromium режет ES-модули по CORS, и экран остаётся пустым
          * без единой ошибки в журнале.
          */
-        const val PAGE_URL = "https://appassets.androidplatform.net/assets/web/mobile.html"
+        const val ASSET_HOST = "appassets.androidplatform.net"
+        const val PAGE_URL = "https://$ASSET_HOST/assets/web/mobile.html"
 
         const val REQUEST_VPN = 1
         const val REQUEST_NOTIFY = 2

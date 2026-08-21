@@ -135,12 +135,33 @@ class Bridge(private val context: Context) : EventSink, Controller {
             onResult(id, "null", "")
             return
         }
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val err = runCatching { context.startActivity(intent) }.exceptionOrNull()
+        val uri = runCatching { Uri.parse(url) }.getOrNull()
+        if (uri == null || !isWebLink(uri)) {
+            onResult(id, "", "[E_NO_METHOD] открывать можно только http(s)-ссылки")
+            return
+        }
+        val err = openExternal(uri)
         // Браузера может не быть вовсе — на «голой» прошивке это реальность.
         onResult(id, if (err == null) "null" else "", err?.let { "[E_NO_METHOD] открыть ссылку нечем" } ?: "")
     }
+
+    /**
+     * Отдаёт ссылку системе (браузеру). Возвращает ошибку, если открыть нечем.
+     *
+     * Схема сверяется здесь, а не у вызывающих: ACTION_VIEW с произвольной схемой
+     * — это запуск чужого экрана по выбору того, кто дал строку, а строки сюда
+     * приходят и снаружи (адрес релиза из ответа GitHub, ссылка, на которую
+     * попыталась уйти страница). Единственное, что приложению нужно уметь
+     * открывать, — обычная веб-ссылка.
+     */
+    fun openExternal(uri: Uri): Throwable? {
+        if (!isWebLink(uri)) return IllegalArgumentException("схема ${uri.scheme} не разрешена")
+        val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching { context.startActivity(intent) }.exceptionOrNull()
+    }
+
+    private fun isWebLink(uri: Uri): Boolean =
+        uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty()
 
     /**
      * Установленные приложения: пакет, читаемое имя, иконка и признак системного.

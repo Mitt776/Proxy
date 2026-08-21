@@ -373,4 +373,7 @@ export const ru: Record<string, string> = {
   "err.E_SET_NOT_FOUND": "Набор правил не найден",
   "err.E_SET_NOT_LIST": "Обновлять вручную можно только текстовые списки .lst",
   "err.E_SET_FETCH": "Не удалось загрузить список",
+  "err.E_INSECURE_URL": "Нужен https-адрес: по http содержимое подменяется по пути",
+  "err.E_INTERNAL": "Внутренняя ошибка",
+  "err.E_UPDATE_CHECK": "Не удалось проверить обновления",
 };

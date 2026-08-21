@@ -17,6 +17,8 @@ package mobile
 
 import (
 	"encoding/json"
+	"fmt"
+	"runtime/debug"
 
 	"Proxy/backend/appcore"
 	"Proxy/backend/rules"
@@ -140,7 +142,24 @@ func init() {
 
 // dispatch выполняет вызов. Неизвестный метод — это либо десктопный метод в общем
 // компоненте, либо опечатка; в обоих случаях молчать нельзя.
-func dispatch(a *application, method string, argsJSON string) (any, error) {
+func dispatch(a *application, method string, argsJSON string) (result any, err error) {
+	// Паника внутри вызова не должна убивать процесс: ядро работает библиотекой
+	// в нём же, и вместе с приложением молча оборвётся туннель — у пользователя
+	// это выглядит как «интернет пропал», причём в самый неудачный момент.
+	// Разбор чужого ввода (подписка, ссылка, QR) идёт по этим же путям, поэтому
+	// цена ошибки в парсере — не диагностика, а отвал связи.
+	defer func() {
+		if r := recover(); r != nil {
+			err = appcore.CodedErrf(appcore.ErrInternal, "внутренняя ошибка в %s: %v", method, r)
+			result = nil
+			// Ядро — единственный путь строки в журнал, но обработчик паники сам
+			// падать не имеет права: проверка дешевле разбирательства.
+			if a != nil && a.core != nil {
+				a.core.LogLine(fmt.Sprintf("паника в %s: %v\n%s", method, r, debug.Stack()))
+			}
+		}
+	}()
+
 	h, ok := methods[method]
 	if !ok {
 		return nil, appcore.CodedErrf(appcore.ErrNoMethod, "метод %q на Android не поддерживается", method)

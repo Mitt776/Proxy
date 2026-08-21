@@ -54,12 +54,33 @@ func qrPayload(p *profile.Profile) string {
 // DecodeQR извлекает текст QR-кода из картинки. Платформа сама решает, откуда её
 // взять: файловый диалог на Windows, галерея на Android.
 func DecodeQR(data []byte) (string, error) {
+	// Сперва только заголовок: размеры в нём объявлены, а память под них ещё не
+	// выделена. PNG весом в пару килобайт может объявить 30000×30000 — это ~3,6 ГБ
+	// на распаковку и мгновенная смерть процесса (на Android вместе с туннелем).
+	// Картинку пользователь берёт из галереи, то есть она вполне может приехать
+	// откуда угодно.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", CodedErrf(ErrQRImage, "не удалось прочитать картинку: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxQRSide || cfg.Height > maxQRSide {
+		return "", CodedErrf(ErrQRImage, "картинка слишком большая: %d×%d, предел %d по стороне",
+			cfg.Width, cfg.Height, maxQRSide)
+	}
+
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return "", CodedErrf(ErrQRImage, "не удалось прочитать картинку: %w", err)
 	}
 	return decodeImage(img)
 }
+
+// maxQRSide — предел стороны картинки с QR-кодом.
+//
+// 10000 с запасом покрывает и снимок с камеры, и скриншот экрана 8K: распознавать
+// QR в чём-то большем незачем, а вот памяти такая картинка требует уже гигабайтами
+// (сторона в квадрате на 4 байта RGBA).
+const maxQRSide = 10000
 
 // DecodeQRGray читает QR прямо из плоскости яркости — так кадр с камеры приходит
 // от CameraX (YUV_420_888, плоскость Y).

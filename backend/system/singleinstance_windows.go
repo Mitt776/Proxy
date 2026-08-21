@@ -116,6 +116,6 @@ func instanceEventAttrs() (*windows.SecurityAttributes, error) {
 // уступка живёт до следующей смены активного окна и ничем не грозит.
 func allowSetForegroundWindow() {
 	const asfwAny = ^uintptr(0) // (DWORD)-1
-	user32 := syscall.NewLazyDLL("user32.dll")
+	user32 := windows.NewLazySystemDLL("user32.dll")
 	_, _, _ = user32.NewProc("AllowSetForegroundWindow").Call(asfwAny)
 }

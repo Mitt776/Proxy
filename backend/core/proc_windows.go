@@ -90,7 +90,7 @@ func killProcessTree(pid int) {
 }
 
 var (
-	kernel32DLL               = syscall.NewLazyDLL("kernel32.dll")
+	kernel32DLL               = windows.NewLazySystemDLL("kernel32.dll")
 	procAttachConsole         = kernel32DLL.NewProc("AttachConsole")
 	procFreeConsole           = kernel32DLL.NewProc("FreeConsole")
 	procSetConsoleCtrlHandler = kernel32DLL.NewProc("SetConsoleCtrlHandler")

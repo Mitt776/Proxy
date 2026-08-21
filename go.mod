@@ -2,6 +2,8 @@ module Proxy
 
 go 1.23.0
 
+toolchain go1.26.6
+
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
 	github.com/energye/systray v1.0.3
