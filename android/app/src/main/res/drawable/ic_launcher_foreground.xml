@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Знак MitM для иконки приложения: ладонь с буквой M.
+
+    Геометрия перенесена из frontend/src/assets/logo-mark.svg, вариант compact —
+    только ладонь, без входящего и исходящего потоков: в 48 пикселях провода и
+    стрелки сливаются в грязь.
+
+    Прямоугольники SVG разложены в контуры (в VectorDrawable элемента rect нет),
+    скругление rx=5 равно половине ширины, поэтому каждый палец — это «стадион»
+    из двух полуокружностей и двух прямых.
+
+    Группа переносит исходные координаты (20..89 по X, 24..106 по Y) в безопасную
+    зону 72dp внутри полотна 108dp: масштаб 72/82, дальше сдвиг до центра.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:scaleX="0.878"
+        android:scaleY="0.878"
+        android:translateX="6.15"
+        android:translateY="-3.07">
+
+        <!-- Пальцы. Прозрачность разная — так планки читаются по отдельности. -->
+        <path
+            android:fillAlpha="0.78"
+            android:pathData="M40,41 a5,5 0 0 1 10,0 v36 a5,5 0 0 1 -10,0 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="91" android:endY="106"
+                    android:startX="20" android:startY="24"
+                    android:type="linear">
+                    <item android:color="#C4B5FD" android:offset="0" />
+                    <item android:color="#7C4DEF" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M53,29 a5,5 0 0 1 10,0 v48 a5,5 0 0 1 -10,0 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="91" android:endY="106"
+                    android:startX="20" android:startY="24"
+                    android:type="linear">
+                    <item android:color="#C4B5FD" android:offset="0" />
+                    <item android:color="#7C4DEF" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:fillAlpha="0.9"
+            android:pathData="M66,32 a5,5 0 0 1 10,0 v45 a5,5 0 0 1 -10,0 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="91" android:endY="106"
+                    android:startX="20" android:startY="24"
+                    android:type="linear">
+                    <item android:color="#C4B5FD" android:offset="0" />
+                    <item android:color="#7C4DEF" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:fillAlpha="0.72"
+            android:pathData="M79,43 a5,5 0 0 1 10,0 v34 a5,5 0 0 1 -10,0 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="91" android:endY="106"
+                    android:startX="20" android:startY="24"
+                    android:type="linear">
+                    <item android:color="#C4B5FD" android:offset="0" />
+                    <item android:color="#7C4DEF" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Большой палец лежит ПОВЕРХ ладони: под ней между фигурами оставался
+             зазор в доли пикселя, а сверху шва не видно — общий градиент даёт
+             обеим одинаковый цвет в точке стыка. -->
+        <path android:pathData="M38,62 h53 v24 a20,20 0 0 1 -20,20 H58 a20,20 0 0 1 -20,-20 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="91" android:endY="106"
+                    android:startX="20" android:startY="24"
+                    android:type="linear">
+                    <item android:color="#C4B5FD" android:offset="0" />
+                    <item android:color="#7C4DEF" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M50,94 L27,80"
+            android:strokeWidth="14"
+            android:strokeLineCap="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:endX="91" android:endY="106"
+                    android:startX="20" android:startY="24"
+                    android:type="linear">
+                    <item android:color="#C4B5FD" android:offset="0" />
+                    <item android:color="#7C4DEF" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Буква M — узнаваемая часть знака -->
+        <path
+            android:pathData="M51,97 V73 l13,17 13,-17 v24"
+            android:strokeColor="#F5F3FF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>

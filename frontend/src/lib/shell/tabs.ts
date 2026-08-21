@@ -10,3 +10,18 @@ export const TABS = [
 ] as const;
 
 export type Tab = (typeof TABS)[number];
+
+/**
+ * Разделы мобильной сборки. «Трафик» выпал сознательно: вкладка построена вокруг
+ * широкой таблицы соединений, а `GetConnections` в мобильном мосте нет вовсе —
+ * см. заголовок mobile/dispatch_android.go.
+ */
+export const MOBILE_TABS = [
+  "connect",
+  "profiles",
+  "routing",
+  "logs",
+  "settings",
+] as const satisfies readonly Tab[];
+
+export type MobileTab = (typeof MOBILE_TABS)[number];

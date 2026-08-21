@@ -44,25 +44,58 @@ class TunnelService : VpnService(), Platform {
         private const val CHANNEL_ID = "tunnel"
         private const val NOTIFICATION_ID = 1
 
-        /** Текст уведомления: состояние и, когда есть, текущая скорость. */
+        /**
+         * Строки уведомления. Оно живёт вне WebView, поэтому словарями фронтенда
+         * (frontend/src/lib/i18n) его не перевести — держим маленькую таблицу
+         * здесь, а язык спрашиваем у Go: пользователь мог выбрать его вручную, и
+         * с языком системы он не обязан совпадать.
+         */
+        private val TEXT = mapOf(
+            "ru" to mapOf(
+                "running" to "Подключено",
+                "starting" to "Подключение…",
+                "error" to "Ошибка подключения",
+                "disconnect" to "Отключить",
+                "mb" to "МБ/с", "kb" to "КБ/с", "b" to "Б/с",
+            ),
+            "en" to mapOf(
+                "running" to "Connected",
+                "starting" to "Connecting…",
+                "error" to "Connection failed",
+                "disconnect" to "Disconnect",
+                "mb" to "MB/s", "kb" to "KB/s", "b" to "B/s",
+            ),
+        )
+
+        /** Состояние ядра, от которого пляшет текст уведомления. */
         @Volatile
-        private var notificationText: String = "Подключение…"
+        private var notificationState: String = "starting"
+
+        /** Скорость в уведомлении; обе нули — строку про скорость не показываем. */
+        @Volatile
+        private var downSpeed: Long = 0
+
+        @Volatile
+        private var upSpeed: Long = 0
 
         /** Обновить уведомление при смене состояния ядра (зовётся из Bridge). */
         fun updateNotification(context: Context, state: String) {
-            notificationText = when (state) {
-                "running" -> "Подключено"
-                "starting" -> "Подключение…"
-                "error" -> "Ошибка подключения"
+            when (state) {
+                "running", "starting", "error" -> notificationState = state
                 else -> return // остановились — уведомление снимет сам сервис
+            }
+            if (state != "running") {
+                downSpeed = 0
+                upSpeed = 0
             }
             notify(context)
         }
 
         /** Обновить скорость в уведомлении. */
-        fun updateSpeed(context: Context, downSpeed: Long, upSpeed: Long) {
-            if (downSpeed == 0L && upSpeed == 0L) return
-            notificationText = "Подключено · ↓ ${speed(downSpeed)} ↑ ${speed(upSpeed)}"
+        fun updateSpeed(context: Context, down: Long, up: Long) {
+            if (down == downSpeed && up == upSpeed) return
+            downSpeed = down
+            upSpeed = up
             notify(context)
         }
 
@@ -70,10 +103,35 @@ class TunnelService : VpnService(), Platform {
             val manager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             // Уведомления нет, пока сервис не в foreground; тогда обновлять нечего.
-            runCatching { manager.notify(NOTIFICATION_ID, buildNotification(context, notificationText)) }
+            runCatching { manager.notify(NOTIFICATION_ID, buildNotification(context)) }
         }
 
-        private fun buildNotification(context: Context, text: String): Notification {
+        fun buildNotification(context: Context): Notification {
+            // Язык, имя активного профиля и момент подключения — из Go. Вызов
+            // локальный, к Clash API не ходит, поэтому годится и раз в секунду.
+            val info = runCatching { JSONObject(Mobile.notificationInfo()) }.getOrNull()
+            val words = TEXT[info?.optString("lang").orEmpty()] ?: TEXT["ru"]!!
+            val profile = info?.optString("profile").orEmpty()
+            val since = info?.optLong("since") ?: 0L
+
+            val status = words[notificationState] ?: notificationState
+            val text = buildString {
+                if (profile.isNotEmpty()) append(profile).append(" · ")
+                append(status)
+                if (downSpeed != 0L || upSpeed != 0L) {
+                    append(" · ↓ ").append(speed(downSpeed, words))
+                    append(" ↑ ").append(speed(upSpeed, words))
+                }
+            }
+            return buildNotification(context, text, words, since)
+        }
+
+        private fun buildNotification(
+            context: Context,
+            text: String,
+            words: Map<String, String>,
+            since: Long,
+        ): Notification {
             val manager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -102,22 +160,30 @@ class TunnelService : VpnService(), Platform {
                 Notification.Builder(context)
             }
 
-            return builder
+            builder
                 .setContentTitle("MitM")
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_lock_lock)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentIntent(openApp)
                 .setOngoing(true)
                 .addAction(
-                    Notification.Action.Builder(null, "Отключить", disconnect).build()
+                    Notification.Action.Builder(null, words["disconnect"], disconnect).build()
                 )
-                .build()
+
+            // Время подключения считает сама система: свой счётчик в уведомлении
+            // пришлось бы перерисовывать каждую секунду даже при нулевом трафике.
+            if (since > 0) {
+                builder.setWhen(since).setUsesChronometer(true).setShowWhen(true)
+            } else {
+                builder.setShowWhen(false)
+            }
+            return builder.build()
         }
 
-        private fun speed(bytes: Long): String = when {
-            bytes >= 1024 * 1024 -> "%.1f МБ/с".format(bytes / 1024.0 / 1024.0)
-            bytes >= 1024 -> "%.0f КБ/с".format(bytes / 1024.0)
-            else -> "$bytes Б/с"
+        private fun speed(bytes: Long, words: Map<String, String>): String = when {
+            bytes >= 1024 * 1024 -> "%.1f %s".format(bytes / 1024.0 / 1024.0, words["mb"])
+            bytes >= 1024 -> "%.0f %s".format(bytes / 1024.0, words["kb"])
+            else -> "%d %s".format(bytes, words["b"])
         }
     }
 
@@ -398,7 +464,7 @@ class TunnelService : VpnService(), Platform {
     // --- уведомление ---------------------------------------------------------
 
     private fun startForegroundNotification() {
-        startForeground(NOTIFICATION_ID, buildNotification(this, notificationText))
+        startForeground(NOTIFICATION_ID, buildNotification(this))
     }
 }
 

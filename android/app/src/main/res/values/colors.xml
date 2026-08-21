@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Обязан совпадать с токеном bg в frontend/src/lib/ui.css и с фоном
+         WebView в MainActivity: этим цветом залита системная заставка, и любое
+         расхождение читается как мигание при запуске. -->
+    <color name="mitm_bg">#0E0A1A</color>
+</resources>

@@ -27,6 +27,12 @@ android {
         }
     }
 
+    buildFeatures {
+        // BuildConfig.DEBUG отличает отладочную сборку от релизной: отладочный
+        // вход для ссылки на ноду в релиз попадать не должен (MainActivity.startUrl).
+        buildConfig = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -65,4 +71,9 @@ dependencies {
     // С file:// Chromium не грузит ES-модули (origin null режется CORS), и экран
     // остаётся пустым без единой ошибки в логе.
     implementation("androidx.webkit:webkit:1.14.0")
+
+    // WindowInsets единым API от Android 7 до 16: отступы под статусбар и полоску
+    // жеста интерфейс получает переменными CSS (см. MainActivity.applyInsets), а
+    // платформенный WindowInsets менял форму трижды за эти версии.
+    implementation("androidx.core:core:1.15.0")
 }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ рисует заставку сам: фон, поверх него значок приложения.
+         Задаём только фон и время показа — знак берётся из иконки приложения,
+         поэтому второй его копии в ресурсах не заводим. -->
+    <style name="Theme.MitM" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mitm_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/mitm_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+</resources>

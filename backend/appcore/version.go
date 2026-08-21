@@ -7,4 +7,4 @@ package appcore
 // `info.productVersion` в wails.json (ресурс версии в exe) и
 // `versionName`/`versionCode` в android/app/build.gradle.kts. Разъехавшиеся
 // значения = «в программе 2.1.0, в свойствах файла 1.3.1».
-const AppVersion = "2.0.2"
+const AppVersion = "2.1.0"

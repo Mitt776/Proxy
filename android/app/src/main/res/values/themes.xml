@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Тема окна. windowBackground — это и есть заставка на Android 11 и ниже:
+         система показывает его, пока приложение не отрисовало первый кадр.
+         На Android 12+ ту же роль играет windowSplashScreenBackground
+         (см. values-v31/themes.xml). -->
+    <style name="Theme.MitM" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mitm_bg</item>
+        <!-- Интерфейс рисуется во весь экран и сам держит отступы под вырезы:
+             начиная с Android 15 система всё равно навязывает edge-to-edge, и
+             две разные раскладки на разных версиях нам не нужны. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+</resources>

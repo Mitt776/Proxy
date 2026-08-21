@@ -19,6 +19,13 @@ declare global {
     __mitmResolve?: (id: number, resultJSON: string, errText: string) => void;
     /** Событие из Go — тот же поток, что EventsOn на Windows. */
     __mitmEvent?: (name: string, payloadJSON: string) => void;
+    /**
+     * Аппаратная кнопка «назад». Вешается оболочкой (AppMobile.svelte), зовётся
+     * из MainActivity; true означает «нажатие обработали», false — сворачивай
+     * приложение. Синхронно: evaluateJavascript отдаёт в колбэк возвращённое
+     * значение, дождаться промиса он не умеет.
+     */
+    __mitmBack?: () => boolean;
   }
 }
 

@@ -53,6 +53,17 @@
   /* Цвет текущего состояния ядра. Переопределяется на корне при core:state,
      чтобы кнопка, точки и рамки красились из одного места. */
   --state: var(--line-2);
+
+  /* Отступы под системные панели телефона. Только на env(safe-area-inset-*)
+     полагаться нельзя: в WebView эти значения описывают вырез экрана, а не
+     статусбар с полоской жеста, — на телефоне без «чёлки» они равны нулю, и
+     шапка уезжает под часы. Точные значения присылает MainActivity, переопределяя
+     эти же переменные на <html>; env() остаётся запасным вариантом. На Windows
+     обе части дают ноль. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 :root[data-state="running"] { --state: var(--accent); }
@@ -348,7 +359,10 @@ select.fld { cursor: pointer; padding: 7px 10px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--s-5);
+  /* Отступ учитывает вырезы экрана: на телефоне модалка иначе уезжает под
+     статусбар сверху и под полоску жеста снизу. На Windows env() = 0. */
+  padding: calc(var(--s-5) + var(--safe-top)) calc(var(--s-5) + var(--safe-right))
+    calc(var(--s-5) + var(--safe-bottom)) calc(var(--s-5) + var(--safe-left));
 }
 .modal {
   background: var(--panel);

@@ -1,165 +1,162 @@
 <script lang="ts">
-  // Экран проверки моста (этап 1 порта). Интерфейса здесь ещё нет — задача одна:
-  // убедиться, что вызовы и события ходят между WebView и Go в обе стороны.
-  // На этапе 2 этот файл станет настоящей оболочкой с бургер-меню.
-  import { onMount, onDestroy } from "svelte";
+  // Оболочка мобильной сборки: шапка с бургером, выдвижное меню разделов и
+  // область контента. Ровно та же роль, что у App.svelte на Windows, — только
+  // раскладка и переключение разделов, вся логика в lib/.
+  import { onMount } from "svelte";
   import {
+    AddManualProfile,
     EventsOn,
     GetAppInfo,
-    GetStatus,
+    GetActiveProfileID,
     ListProfiles,
-    GetLogs,
-    AddManualProfile,
-    Connect,
-    Disconnect,
   } from "$api";
   import "./lib/ui.css";
 
-  // Ссылку на ноду можно передать при запуске, чтобы не набирать её на телефоне:
-  //   adb shell am start ... -d 'https://appassets.androidplatform.net/assets/web/mobile.html?link=<url-encoded>'
-  // Нигде не сохраняется — только в поле ввода.
-  let link = new URLSearchParams(location.search).get("link") ?? "";
+  import TopBar from "./lib/mobile/TopBar.svelte";
+  import Drawer from "./lib/mobile/Drawer.svelte";
+  import ConnectScreenMobile from "./lib/mobile/ConnectScreenMobile.svelte";
+  import Soon from "./lib/mobile/Soon.svelte";
+  import type { MobileTab } from "./lib/shell/tabs";
 
-  let info: any = null;
-  let status: any = null;
-  let profiles: any[] = [];
-  let logs: string[] = [];
-  let error = "";
+  import { initStore, toastText } from "./lib/store";
+  import { initLang, t } from "./lib/i18n";
 
-  let offState: (() => void) | null = null;
-  let offLog: (() => void) | null = null;
+  let version = "";
+  let tab: MobileTab = "connect";
+  let menuOpen = false;
+  let profileName = "";
+  let ready = false;
 
-  async function refresh() {
+  onMount(async () => {
+    const info = await GetAppInfo();
+    version = info.appVersion;
+    initLang(info.lang);
+
+    await initStore();
+    await importDebugLink();
+    await loadProfile();
+    EventsOn("profiles:changed", loadProfile);
+
+    // Системная заставка Android держится до первого кадра WebView. Проявляем
+    // интерфейс только после загрузки состояния, иначе пользователь застаёт
+    // пустой экран с неактивной кнопкой и решает, что профилей нет.
+    ready = true;
+
+    // Аппаратная кнопка «назад»: сперва закрываем меню, потом уводим на
+    // «Подключение». Ответ читает MainActivity — вернули false, значит свернуть
+    // приложение. Ответ обязан быть синхронным: evaluateJavascript отдаёт в
+    // колбэк именно возвращённое значение, промис туда не поместится.
+    window.__mitmBack = () => {
+      if (menuOpen) {
+        menuOpen = false;
+        return true;
+      }
+      if (tab !== "connect") {
+        tab = "connect";
+        return true;
+      }
+      return false;
+    };
+  });
+
+  /**
+   * Временный костыль порта: настоящего импорта профилей ещё нет (этап 3), а
+   * набирать ссылку `vless://` пальцем на телефоне невозможно. Ссылка приходит
+   * отладочной intent-экстрой и только в debug-сборке — см. MainActivity.startUrl().
+   * Удалить вместе с параметром, когда появятся импорт из буфера и QR.
+   */
+  async function importDebugLink() {
+    const link = new URLSearchParams(location.search).get("link");
+    if (!link) return;
+    // Из адреса убираем сразу: перезагрузка страницы не должна заводить дубль.
+    history.replaceState(null, "", location.pathname);
     try {
-      [info, status, profiles, logs] = await Promise.all([
-        GetAppInfo(),
-        GetStatus(),
-        ListProfiles(),
-        GetLogs(),
-      ]);
-      error = "";
-      console.log(`мост: версия ${info.appVersion}, ядро ${info.coreVersion}, профилей ${profiles.length}`);
-    } catch (e: any) {
-      error = e?.message ?? String(e);
-      console.log(`мост: ошибка — ${error}`);
+      await AddManualProfile("", link);
+    } catch (e) {
+      console.error("отладочный импорт:", e);
     }
   }
 
-  async function run(name: string, action: () => Promise<unknown>) {
-    try {
-      await action();
-      error = "";
-      console.log(`мост: ${name} — успех`);
-    } catch (e: any) {
-      error = e?.message ?? String(e);
-      console.log(`мост: ${name} — ${error}`);
-    }
-    await refresh();
+  async function loadProfile() {
+    const [list, activeId] = await Promise.all([ListProfiles(), GetActiveProfileID()]);
+    const p = (list || []).find((x: { id: string }) => x.id === activeId);
+    profileName = p ? p.name : "";
   }
-
-  onMount(() => {
-    refresh();
-    offState = EventsOn("core:state", (payload: any) => {
-      status = payload;
-    });
-    offLog = EventsOn("core:log", (line: any) => {
-      logs = [...logs.slice(-200), String(line)];
-    });
-  });
-
-  onDestroy(() => {
-    offState?.();
-    offLog?.();
-  });
 </script>
 
-<main>
-  <h1>MitM — проверка моста</h1>
+<div class="app" class:ready>
+  <TopBar bind:menuOpen />
 
-  {#if error}
-    <p class="err">{error}</p>
-  {/if}
-
-  <input class="fld" bind:value={link} placeholder="vless://…" />
-  <div class="row">
-    <button class="btn" on:click={() => run("AddManualProfile", () => AddManualProfile("", link))}>
-      Добавить профиль
-    </button>
-    <button class="btn" on:click={() => run("Connect", () => Connect(true))}>Подключить</button>
-    <button class="btn" on:click={() => run("Disconnect", () => Disconnect())}>Отключить</button>
-    <button class="btn" on:click={refresh}>Обновить</button>
-  </div>
-
-  {#if info}
-    <section>
-      <h2>Окружение</h2>
-      <p>версия {info.appVersion} · ядро {info.coreVersion}</p>
-      <p>данные: {info.dataDir}</p>
-      <p>язык: {info.lang} · платформа: {info.platform}</p>
-    </section>
-  {/if}
-
-  {#if status}
-    <section>
-      <h2>Состояние</h2>
-      <p>{status.state}{status.since ? ` · с ${new Date(status.since).toLocaleTimeString()}` : ""}</p>
-    </section>
-  {/if}
-
-  <section>
-    <h2>Профили ({profiles.length})</h2>
-    {#each profiles as p}
-      <p>{p.name} — {p.kind}</p>
+  <main>
+    {#if tab === "connect"}
+      <ConnectScreenMobile hasProfile={!!profileName} />
+    {:else if tab === "profiles"}
+      <Soon icon="layers" title={$t("tab.profiles")} />
+    {:else if tab === "routing"}
+      <Soon icon="route" title={$t("tab.routing")} />
+    {:else if tab === "logs"}
+      <Soon icon="terminal" title={$t("tab.logs")} />
     {:else}
-      <p class="dim">пусто</p>
-    {/each}
-  </section>
+      <Soon icon="settings" title={$t("tab.settings")} />
+    {/if}
+  </main>
 
-  <section>
-    <h2>Журнал</h2>
-    <pre>{logs.slice(-20).join("\n") || "пусто"}</pre>
-  </section>
-</main>
+  <span class="version">{version}</span>
+</div>
+
+{#if menuOpen}
+  <Drawer bind:tab {profileName} on:close={() => (menuOpen = false)} />
+{/if}
+
+{#if $toastText}<div class="toast">{$toastText}</div>{/if}
 
 <style>
-  main {
-    padding: 16px;
-    color: var(--text);
-    font: 14px/1.5 system-ui, sans-serif;
-    min-height: 100vh;
-    background: var(--bg);
-  }
-  h1 {
-    font-size: 18px;
-    margin: 0 0 12px;
-  }
-  h2 {
-    font-size: 14px;
-    margin: 16px 0 4px;
-    color: var(--muted);
-  }
-  p {
-    margin: 2px 0;
-  }
-  pre {
-    white-space: pre-wrap;
-    word-break: break-all;
-    font-size: 11px;
-    color: var(--muted);
-  }
-  .err {
-    color: var(--danger);
-  }
-  .dim {
-    color: var(--muted);
-  }
-  .row {
+  .app {
+    height: 100%;
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    opacity: 0;
+    transition: opacity 0.35s ease;
   }
-  .fld {
-    width: 100%;
+  .app.ready {
+    opacity: 1;
+  }
+
+  main {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    /* Нижний вырез — «полоска жеста»: без отступа выбор сервера и кнопки
+       разделов оказываются ровно под ней и не нажимаются. */
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+
+  .version {
+    position: fixed;
+    right: calc(var(--s-2) + var(--safe-right));
+    bottom: calc(2px + var(--safe-bottom));
+    font-size: 10px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(26px + var(--safe-bottom));
+    transform: translateX(-50%);
+    z-index: 400;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 20px;
+    border-radius: var(--r-pill);
+    box-shadow: var(--shadow);
   }
 </style>

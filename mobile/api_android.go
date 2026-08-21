@@ -206,6 +206,39 @@ func ServiceStop() {
 	instance.runner.serviceStop()
 }
 
+// NotificationInfo — данные для уведомления сервиса: язык интерфейса и имя
+// активного профиля. Уведомление живёт вне WebView, поэтому переводить его
+// словарями фронтенда нечем — язык едет сюда, а строки лежат таблицей в Kotlin.
+//
+// Зовётся на каждой перерисовке уведомления (раз в секунду при живом трафике),
+// поэтому только локальное состояние: ни одного обращения к Clash API.
+func NotificationInfo() string {
+	appMu.Lock()
+	instance := app
+	appMu.Unlock()
+	if instance == nil {
+		return "{}"
+	}
+
+	name := ""
+	activeID := instance.core.GetActiveProfileID()
+	for _, p := range instance.core.ListProfiles() {
+		if p.ID == activeID {
+			name = p.Name
+			break
+		}
+	}
+	data, err := json.Marshal(struct {
+		Lang    string `json:"lang"`
+		Profile string `json:"profile"`
+		Since   int64  `json:"since"`
+	}{instance.core.CurrentLang(), name, instance.core.ConnectedAt()})
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
 // IsRunning — состояние для холодного старта Activity.
 func IsRunning() bool {
 	appMu.Lock()

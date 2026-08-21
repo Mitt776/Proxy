@@ -304,6 +304,14 @@ export const en: Record<string, string> = {
   "settings.license":
     "The interface is original work. sing-box and its fork are GPLv3 and run as separate processes.",
 
+  // --- Mobile shell ---
+  "m.menu": "Sections",
+  "m.menu.close": "Close menu",
+  "m.noProfile": "No profile selected",
+  "m.server": "Server",
+  "m.soon": "This section is coming in a later build",
+  "m.ms": "ms",
+
   // --- Errors by code (see errcodes.go) ---
   "err.E_NOT_READY": "The application is not ready yet",
   "err.E_NO_PROFILE": "No active profile selected",
