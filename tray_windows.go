@@ -218,8 +218,8 @@ func (a *App) onTrayReady() {
 	mShow.Click(func() { runtime.WindowShow(a.ctx) })
 	connect.Click(func() {
 		enableTUN := false
-		if a.settings != nil {
-			enableTUN = a.settings.Get().EnableTUN
+		if a.core != nil {
+			enableTUN = a.core.GetSettings().EnableTUN
 		}
 		_ = a.Connect(enableTUN)
 	})
@@ -239,13 +239,13 @@ func (a *App) onTrayReady() {
 // rebuildTrayProfiles наполняет подменю профилей. energye/systray не умеет
 // удалять пункты, поэтому существующие переиспользуем, а лишние прячем.
 func (a *App) rebuildTrayProfiles() {
-	if a.store == nil {
+	if a.core == nil {
 		return
 	}
 	// Список читаем до захвата trayMu: обращение к хранилищу берёт свои
 	// блокировки, и держать здесь чужую нам ни к чему.
-	profiles := a.store.List()
-	activeID := a.store.ActiveID()
+	profiles := a.core.ListProfiles()
+	activeID := a.core.GetActiveProfileID()
 
 	trayMu.Lock()
 	defer trayMu.Unlock()

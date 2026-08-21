@@ -1,4 +1,9 @@
-package main
+// Package appcore — переносимое ядро приложения: профили, маршрутизация, настройки,
+// Clash API и подписки. Не знает ни о Wails, ни о Windows, ни об Android — всё
+// платформенное приходит через Host и Runner. Один и тот же код обслуживает GUI на
+// Windows и APK: иначе withRouting, applyRouting и планировщик подписок пришлось бы
+// держать в двух копиях, и разошлись бы они молча.
+package appcore
 
 import "fmt"
 
@@ -37,13 +42,13 @@ const (
 	ErrSetFetch    = "E_SET_FETCH"     // список правил не скачался или оказался пустым
 )
 
-// codedErr собирает ошибку с кодом. Русский текст остаётся фолбэком на случай,
+// CodedErr собирает ошибку с кодом. Русский текст остаётся фолбэком на случай,
 // если фронтенд не знает код (старая сборка UI, неожиданный путь).
-func codedErr(code, ru string) error {
+func CodedErr(code, ru string) error {
 	return fmt.Errorf("[%s] %s", code, ru)
 }
 
-// codedErrf — то же для форматируемых сообщений, включая обёртку через %w.
-func codedErrf(code, format string, args ...any) error {
+// CodedErrf — то же для форматируемых сообщений, включая обёртку через %w.
+func CodedErrf(code, format string, args ...any) error {
 	return fmt.Errorf("["+code+"] "+format, args...)
 }
