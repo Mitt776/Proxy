@@ -3,21 +3,17 @@
   // контекстное меню (QR, копирование конфига и исходных ссылок). Всё, что
   // нужно редко, живёт в модалках — на экране остаётся сам список.
   import { onMount } from "svelte";
+  import { ImportQRImage } from "$api";
+  import { EventsOn } from "$api";
+  import { connected, reportError, fmtDate } from "./store";
   import {
-    ListProfiles, GetActiveProfileID, SetActiveProfile, AddManualProfile,
-    AddSubscriptionProfile, RefreshProfile, DeleteProfile,
-    ProfileConfigJSON, ProfileRaw, ProfileQR, ImportQRImage,
-  } from "$api";
-  import { EventsOn, ClipboardSetText, ClipboardGetText } from "$api";
-  import { connected, reportError, showToast, fmtDate } from "./store";
-  import { t, tp, tr } from "./i18n";
+    activateProfile, activeProfileID, addProfile, clipboardText, copyProfileJSON,
+    copyProfileRaw, deleteProfile, loadProfiles, profileQR, profiles, refreshProfile,
+  } from "./profiles";
+  import { t, tp } from "./i18n";
   import { errText } from "./i18n/errors";
   import Icon from "./icons/Icon.svelte";
   import TabHead from "./shell/TabHead.svelte";
-  import type { profile } from "../../wailsjs/go/models";
-
-  let profiles: profile.Profile[] = [];
-  let activeId = "";
 
   let showAdd = false;
   let addMode: "manual" | "sub" = "manual";
@@ -30,18 +26,9 @@
   let qrImg = "";
 
   onMount(async () => {
-    await load();
-    EventsOn("profiles:changed", load);
+    await loadProfiles();
+    EventsOn("profiles:changed", loadProfiles);
   });
-
-  async function load() {
-    try {
-      profiles = await ListProfiles();
-      activeId = await GetActiveProfileID();
-    } catch (e) {
-      reportError(e);
-    }
-  }
 
   function openAdd() {
     addErr = "";
@@ -52,17 +39,10 @@
     addErr = "";
     adding = true;
     try {
-      if (addMode === "manual") {
-        if (!fRaw.trim()) throw new Error(tr("profiles.needRaw"));
-        await AddManualProfile("", fRaw);
-      } else {
-        if (!fURL.trim()) throw new Error(tr("profiles.needURL"));
-        await AddSubscriptionProfile("", fURL);
-      }
+      await addProfile(addMode, addMode === "manual" ? fRaw : fURL);
       fRaw = "";
       fURL = "";
       showAdd = false;
-      await load();
     } catch (e) {
       addErr = errText(e);
     } finally {
@@ -70,35 +50,9 @@
     }
   }
 
-  async function activate(id: string) {
-    try {
-      await SetActiveProfile(id);
-      activeId = id;
-    } catch (e) {
-      reportError(e);
-    }
-  }
-  async function refresh(id: string) {
-    try {
-      await RefreshProfile(id);
-      await load();
-      showToast(tr("profiles.refreshed"));
-    } catch (e) {
-      reportError(e);
-    }
-  }
-  async function remove(id: string) {
-    try {
-      await DeleteProfile(id);
-      await load();
-    } catch (e) {
-      reportError(e);
-    }
-  }
-
   async function pasteClip() {
     try {
-      const s = (await ClipboardGetText())?.trim();
+      const s = await clipboardText();
       if (!s) return;
       if (addMode === "manual") fRaw = s;
       else fURL = s;
@@ -110,7 +64,7 @@
   async function importQR() {
     try {
       const p = await ImportQRImage();
-      if (p) await load();
+      if (p) await loadProfiles();
     } catch (e) {
       reportError(e);
     }
@@ -128,29 +82,15 @@
 
   async function showQR(id: string) {
     closeMenu();
-    try {
-      qrImg = await ProfileQR(id);
-    } catch (e) {
-      reportError(e);
-    }
+    qrImg = await profileQR(id);
   }
   async function copyJSON(id: string) {
     closeMenu();
-    try {
-      await ClipboardSetText(await ProfileConfigJSON(id));
-      showToast(tr("profiles.copiedJSON"));
-    } catch (e) {
-      reportError(e);
-    }
+    await copyProfileJSON(id);
   }
   async function copyRaw(id: string) {
     closeMenu();
-    try {
-      await ClipboardSetText(await ProfileRaw(id));
-      showToast(tr("profiles.copiedRaw"));
-    } catch (e) {
-      reportError(e);
-    }
+    await copyProfileRaw(id);
   }
 </script>
 
@@ -161,7 +101,7 @@
     </button>
   </TabHead>
 
-  {#if profiles.length === 0}
+  {#if $profiles.length === 0}
     <div class="panel none">
       <Icon name="layers" size={30} />
       <div class="none-t">{$t("profiles.empty")}</div>
@@ -172,8 +112,8 @@
     </div>
   {:else}
     <div class="grid">
-      {#each profiles as p (p.id)}
-        <div class="pcard card" class:on={p.id === activeId}
+      {#each $profiles as p (p.id)}
+        <div class="pcard card" class:on={p.id === $activeProfileID}
              on:contextmenu={(e) => openMenu(e, p.id)}>
           <div class="top">
             <span class="pname" title={p.name}>{p.name}</span>
@@ -185,12 +125,12 @@
             {$tp("profiles.nodes", p.nodeCount)} · {$fmtDate(p.updatedAt)}
           </div>
           <div class="pacts">
-            {#if p.id === activeId}
+            {#if p.id === $activeProfileID}
               <span class="pill accent"><Icon name="check" size={11} />{$t("profiles.active")}</span>
             {:else}
               <!-- Не блокируем на живом соединении: SetActiveProfile пересобирает
                    конфиг и перезапускает ядро, не снимая системный прокси. -->
-              <button class="btn sm" on:click={() => activate(p.id)}>
+              <button class="btn sm" on:click={() => activateProfile(p.id)}>
                 {$t("profiles.activate")}
               </button>
             {/if}
@@ -203,12 +143,12 @@
             </button>
             {#if p.kind === "subscription"}
               <button class="icon-btn" title={$t("common.refresh")} disabled={$connected}
-                      on:click={() => refresh(p.id)}>
+                      on:click={() => refreshProfile(p.id)}>
                 <Icon name="refresh" size={14} />
               </button>
             {/if}
             <button class="icon-btn danger" title={$t("common.delete")} disabled={$connected}
-                    on:click={() => remove(p.id)}>
+                    on:click={() => deleteProfile(p.id)}>
               <Icon name="trash" size={14} />
             </button>
           </div>

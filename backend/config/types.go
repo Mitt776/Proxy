@@ -25,6 +25,12 @@ type Options struct {
 	EnableTUN bool   // добавить tun inbound (полный перехват)
 	TUNStack  string // gvisor|system|mixed
 
+	// ExcludePackage — пакеты Android, которым туннель не достаётся. На Windows
+	// всегда пусто: сам список приложений там взять неоткуда, а поле ядро на этой
+	// платформе игнорирует. Едет через конфиг, а не отдельным каналом в Kotlin,
+	// чтобы исключения задавались там же, где и остальные параметры туннеля.
+	ExcludePackage []string
+
 	Nodes []Node // распарсенные ноды профиля
 
 	// Routing — упорядоченный список правил маршрутизации и групп нод
@@ -143,6 +149,7 @@ type tunInbound struct {
 	Stack                  string   `json:"stack"`
 	MTU                    int      `json:"mtu,omitempty"`
 	EndpointIndependentNAT bool     `json:"endpoint_independent_nat,omitempty"`
+	ExcludePackage         []string `json:"exclude_package,omitempty"`
 }
 
 type selectorOutbound struct {

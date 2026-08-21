@@ -52,12 +52,38 @@ func qrPayload(p *profile.Profile) string {
 }
 
 // DecodeQR извлекает текст QR-кода из картинки. Платформа сама решает, откуда её
-// взять: файловый диалог на Windows, камера или галерея на Android.
+// взять: файловый диалог на Windows, галерея на Android.
 func DecodeQR(data []byte) (string, error) {
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return "", CodedErrf(ErrQRImage, "не удалось прочитать картинку: %w", err)
 	}
+	return decodeImage(img)
+}
+
+// DecodeQRGray читает QR прямо из плоскости яркости — так кадр с камеры приходит
+// от CameraX (YUV_420_888, плоскость Y).
+//
+// Смысл в том, чтобы не гонять каждый кадр через JPEG: кодирование в Kotlin и
+// обратное декодирование здесь — это десятки миллисекунд и мусор в куче на
+// каждый из нескольких кадров в секунду, а распознавателю нужна ровно яркость,
+// цвет он всё равно отбрасывает.
+//
+// stride — длина строки в байтах; у камеры она обычно больше ширины кадра, и
+// без учёта выравнивания картинка «съезжает» по диагонали.
+func DecodeQRGray(data []byte, width, height, stride int) (string, error) {
+	if width <= 0 || height <= 0 || stride < width || len(data) < stride*(height-1)+width {
+		return "", CodedErr(ErrQRImage, "кадр камеры пришёл повреждённым")
+	}
+	img := &image.Gray{
+		Pix:    data,
+		Stride: stride,
+		Rect:   image.Rect(0, 0, width, height),
+	}
+	return decodeImage(img)
+}
+
+func decodeImage(img image.Image) (string, error) {
 	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
 		return "", err

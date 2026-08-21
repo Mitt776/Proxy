@@ -152,6 +152,7 @@ func Start(dataDir string, assetsDir string, sysLang string, sink EventSink, con
 	instance.runner.onLog = instance.onCoreLog
 	instance.core.SetRunner(instance.runner)
 	instance.core.StartSubScheduler()
+	instance.core.StartUpdateScheduler()
 
 	app = instance
 	return nil
@@ -204,6 +205,61 @@ func ServiceStop() {
 		return
 	}
 	instance.runner.serviceStop()
+}
+
+// ImportQRImage добавляет профиль по QR-коду с картинки: снимок с камеры или
+// файл из галереи. Байты, а не путь: у выбранного в системном пикере файла пути
+// в нашем понимании нет вовсе — есть content-URI, читать который умеет только
+// Kotlin.
+//
+// Возвращает имя добавленного профиля, чтобы интерфейсу было что показать.
+func ImportQRImage(data []byte) (string, error) {
+	instance, err := current()
+	if err != nil {
+		return "", err
+	}
+	text, err := appcore.DecodeQR(data)
+	if err != nil {
+		return "", err
+	}
+	p, err := instance.core.AddManualProfile("", text)
+	if err != nil {
+		return "", err
+	}
+	return p.Name, nil
+}
+
+// ImportQRFrame — то же, но для кадра с камеры: плоскость яркости из
+// YUV_420_888 как есть, без кодирования в JPEG по дороге.
+//
+// Возвращает пустое имя без ошибки, когда в кадре QR просто нет: сканер зовёт
+// это несколько раз в секунду, и «не нашёл» — обычное состояние, а не сбой.
+func ImportQRFrame(data []byte, width, height, stride int32) (string, error) {
+	instance, err := current()
+	if err != nil {
+		return "", err
+	}
+	text, err := appcore.DecodeQRGray(data, int(width), int(height), int(stride))
+	if err != nil {
+		return "", nil
+	}
+	p, err := instance.core.AddManualProfile("", text)
+	if err != nil {
+		return "", err
+	}
+	return p.Name, nil
+}
+
+// CurrentLang — язык интерфейса для экранов, которые рисует сама Kotlin
+// (сканер QR). Их подписи словарями фронтенда не переводятся.
+func CurrentLang() string {
+	appMu.Lock()
+	instance := app
+	appMu.Unlock()
+	if instance == nil {
+		return "ru"
+	}
+	return instance.core.CurrentLang()
 }
 
 // NotificationInfo — данные для уведомления сервиса: язык интерфейса и имя

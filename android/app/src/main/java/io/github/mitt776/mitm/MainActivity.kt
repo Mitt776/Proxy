@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -20,6 +22,10 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
+import io.github.mitt776.mobile.Mobile
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import kotlin.concurrent.thread
 
 /**
  * Окно приложения — один WebView с тем же интерфейсом, что и на Windows.
@@ -182,11 +188,123 @@ class MainActivity : Activity() {
         runOnUiThread { startActivityForResult(intent, REQUEST_VPN) }
     }
 
+    // --- импорт профиля картинкой и камерой -----------------------------------
+    //
+    // Оба пути возвращают имя заведённого профиля тому вызову из JS, который их
+    // начал. Ждать приходится через onActivityResult, поэтому id вызова живёт
+    // здесь до возвращения пользователя.
+
+    private var pendingImageCall = 0
+    private var pendingScanCall = 0
+
+    /** Выбрать картинку с QR из галереи. */
+    fun pickQRImage(callID: Int) {
+        pendingImageCall = callID
+        // ACTION_GET_CONTENT, а не доступ к хранилищу: выбранный файл отдаётся
+        // разово по content-URI, и никаких разрешений просить не нужно.
+        val intent = Intent(Intent.ACTION_GET_CONTENT)
+            .setType("image/*")
+            .addCategory(Intent.CATEGORY_OPENABLE)
+        runCatching { startActivityForResult(intent, REQUEST_QR_IMAGE) }
+            .onFailure {
+                finishCall(pendingImageCall.also { pendingImageCall = 0 }, "",
+                    "[E_NO_METHOD] выбрать картинку нечем")
+            }
+    }
+
+    /** Навести камеру на QR. Разрешение спрашиваем прямо перед съёмкой. */
+    fun scanQR(callID: Int) {
+        pendingScanCall = callID
+        val granted = checkSelfPermission(Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startActivityForResult(Intent(this, QrScanActivity::class.java), REQUEST_QR_SCAN)
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CAMERA) return
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startActivityForResult(Intent(this, QrScanActivity::class.java), REQUEST_QR_SCAN)
+        } else {
+            // Отказ — не ошибка: пользователь передумал. Отвечаем пустым именем,
+            // и интерфейс просто ничего не делает.
+            finishCall(pendingScanCall.also { pendingScanCall = 0 }, "", null)
+        }
+    }
+
+    /**
+     * Читает выбранную картинку и отдаёт её в Go на распознавание.
+     *
+     * Уменьшаем перед этим: снимок с 50-мегапиксельной камеры телефона — это
+     * ~100 МБ в памяти после декодирования, и распознавание такой картины
+     * занимает секунды. Для QR хватает полутора тысяч пикселей по длинной
+     * стороне.
+     */
+    private fun importPickedImage(uri: Uri) {
+        val callID = pendingImageCall
+        pendingImageCall = 0
+        thread(name = "mitm-qr-image") {
+            try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+
+                val longest = maxOf(bounds.outWidth, bounds.outHeight)
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = 1
+                    while (longest / inSampleSize > QR_MAX_SIDE) inSampleSize *= 2
+                }
+                val bitmap = contentResolver.openInputStream(uri)
+                    ?.use { BitmapFactory.decodeStream(it, null, opts) }
+                    ?: throw IllegalStateException("картинка не читается")
+
+                val bytes = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)
+                bitmap.recycle()
+
+                val name = Mobile.importQRImage(bytes.toByteArray())
+                finishCall(callID, name, null)
+            } catch (e: Throwable) {
+                finishCall(callID, "", e.message ?: "не удалось прочитать картинку")
+            }
+        }
+    }
+
+    /** Ответить вызову из JS: имя профиля либо ошибка. */
+    private fun finishCall(callID: Int, profileName: String, error: String?) {
+        if (callID == 0) return
+        if (error != null) bridge.onResult(callID, "", error)
+        else bridge.onResult(callID, JSONObject.quote(profileName), "")
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_VPN) {
-            bridge.onVpnConsent(resultCode == RESULT_OK)
+        when (requestCode) {
+            REQUEST_VPN -> bridge.onVpnConsent(resultCode == RESULT_OK)
+
+            REQUEST_QR_IMAGE -> {
+                val uri = data?.data
+                // Отмена выбора — не ошибка: отвечаем пустым именем.
+                if (resultCode != RESULT_OK || uri == null) {
+                    finishCall(pendingImageCall.also { pendingImageCall = 0 }, "", null)
+                } else {
+                    importPickedImage(uri)
+                }
+            }
+
+            REQUEST_QR_SCAN -> {
+                val name = data?.getStringExtra(QrScanActivity.EXTRA_PROFILE).orEmpty()
+                finishCall(pendingScanCall.also { pendingScanCall = 0 }, name, null)
+            }
         }
     }
 
@@ -194,5 +312,11 @@ class MainActivity : Activity() {
         const val TAG = "MitM"
         const val REQUEST_VPN = 1
         const val REQUEST_NOTIFY = 2
+        const val REQUEST_QR_IMAGE = 3
+        const val REQUEST_QR_SCAN = 4
+        const val REQUEST_CAMERA = 5
+
+        /** Длинная сторона картинки перед распознаванием QR. */
+        const val QR_MAX_SIDE = 1600
     }
 }

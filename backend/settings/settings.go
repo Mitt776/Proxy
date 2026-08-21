@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Settings — сохраняемые настройки приложения.
@@ -41,6 +42,21 @@ type Settings struct {
 	// выбирал» и приводит к автоопределению по локали Windows (system.DefaultLang).
 	// Тем же путём проходят settings.json старых версий, где поля просто нет.
 	Lang string `json:"lang"`
+
+	// NoUpdateCheck выключает ежесуточный запрос к GitHub Releases. Инверсия, как
+	// у AllowQUIC, ради нулевого значения: старые settings.json без поля → false →
+	// проверка включена, а это и есть желаемое поведение по умолчанию.
+	NoUpdateCheck bool `json:"noUpdateCheck"`
+
+	// LastUpdateCheck — когда последний раз спрашивали GitHub. На диске, а не в
+	// памяти: иначе каждый запуск приложения бил бы по API заново, а у анонимных
+	// запросов лимит 60 в час на адрес.
+	LastUpdateCheck time.Time `json:"lastUpdateCheck,omitempty"`
+
+	// ExcludedApps — пакеты Android, которые ходят мимо туннеля
+	// (VpnService.Builder.addDisallowedApplication). На Windows поля нет смысла:
+	// системный прокси и TUN там общесистемные, приложение из них не вычесть.
+	ExcludedApps []string `json:"excludedApps,omitempty"`
 
 	// Наследие версий до 1.2.0: режим маршрутизации, блок рекламы и три плоских
 	// списка доменов. Начиная с 1.2.0 всё это живёт единым упорядоченным списком

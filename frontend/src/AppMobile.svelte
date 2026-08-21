@@ -12,16 +12,25 @@
   } from "$api";
   import "./lib/ui.css";
 
+  import { OpenURL } from "$api";
   import TopBar from "./lib/mobile/TopBar.svelte";
   import Drawer from "./lib/mobile/Drawer.svelte";
   import ConnectScreenMobile from "./lib/mobile/ConnectScreenMobile.svelte";
+  import ProfilesTabMobile from "./lib/mobile/ProfilesTabMobile.svelte";
+  import SettingsTabMobile from "./lib/mobile/SettingsTabMobile.svelte";
   import Soon from "./lib/mobile/Soon.svelte";
+  import Icon from "./lib/icons/Icon.svelte";
   import type { MobileTab } from "./lib/shell/tabs";
 
   import { initStore, toastText } from "./lib/store";
   import { initLang, t } from "./lib/i18n";
 
   let version = "";
+  let coreVersion = "";
+  let dataDir = "";
+
+  /** Найденное обновление — показывается полоской над содержимым. */
+  let update: { version: string; url: string } | null = null;
   let tab: MobileTab = "connect";
   let menuOpen = false;
   let profileName = "";
@@ -30,7 +39,13 @@
   onMount(async () => {
     const info = await GetAppInfo();
     version = info.appVersion;
+    coreVersion = info.coreVersion;
+    dataDir = info.dataDir;
     initLang(info.lang);
+
+    // Магазина у нас нет — о новой версии сказать больше некому. Полоска
+    // появляется по событию из Go и уводит на страницу релиза.
+    EventsOn("update:available", (u: { version: string; url: string }) => (update = u));
 
     await initStore();
     await importDebugLink();
@@ -47,6 +62,7 @@
     // приложение. Ответ обязан быть синхронным: evaluateJavascript отдаёт в
     // колбэк именно возвращённое значение, промис туда не поместится.
     window.__mitmBack = () => {
+      if (closeTopOverlay()) return true;
       if (menuOpen) {
         menuOpen = false;
         return true;
@@ -58,6 +74,23 @@
       return false;
     };
   });
+
+  /**
+   * Закрывает верхнее модальное окно, если оно открыто.
+   *
+   * Ищем окно в DOM, а не ведём собственный список: модалки разбросаны по
+   * компонентам, часть из них общая с десктопом (выбор ноды), и заставлять
+   * каждую регистрироваться в оболочке — это ровно тот случай, когда однажды
+   * забудут. Общего у всех окон ровно одно: рамка `.modal-backdrop`, которая уже
+   * умеет закрываться по Escape, — им и пользуемся.
+   */
+  function closeTopOverlay(): boolean {
+    const backdrops = document.querySelectorAll<HTMLElement>(".modal-backdrop");
+    const top = backdrops[backdrops.length - 1];
+    if (!top) return false;
+    top.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    return true;
+  }
 
   /**
    * Временный костыль порта: настоящего импорта профилей ещё нет (этап 3), а
@@ -87,17 +120,28 @@
 <div class="app" class:ready>
   <TopBar bind:menuOpen />
 
+  {#if update}
+    <div class="update">
+      <Icon name="download" size={15} />
+      <span>{$t("m.update.ready", { v: update.version })}</span>
+      <button class="go" on:click={() => OpenURL(update.url)}>{$t("m.settings.open")}</button>
+      <button class="hide" aria-label={$t("common.close")} on:click={() => (update = null)}>
+        <Icon name="close" size={14} />
+      </button>
+    </div>
+  {/if}
+
   <main>
     {#if tab === "connect"}
       <ConnectScreenMobile hasProfile={!!profileName} />
     {:else if tab === "profiles"}
-      <Soon icon="layers" title={$t("tab.profiles")} />
+      <ProfilesTabMobile />
     {:else if tab === "routing"}
       <Soon icon="route" title={$t("tab.routing")} />
     {:else if tab === "logs"}
       <Soon icon="terminal" title={$t("tab.logs")} />
     {:else}
-      <Soon icon="settings" title={$t("tab.settings")} />
+      <SettingsTabMobile appVersion={version} {coreVersion} {dataDir} />
     {/if}
   </main>
 
@@ -134,6 +178,45 @@
     padding-bottom: var(--safe-bottom);
     padding-left: var(--safe-left);
     padding-right: var(--safe-right);
+  }
+
+  /* Полоска обновления — над содержимым, а не поверх него: она появляется редко
+     и не должна перекрывать кнопку подключения. */
+  .update {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 9px calc(var(--s-3) + var(--safe-right)) 9px calc(var(--s-3) + var(--safe-left));
+    background: var(--accent-dim);
+    border-bottom: 1px solid var(--accent);
+    color: var(--accent-2);
+    font-size: 12.5px;
+  }
+  .update span {
+    flex: 1;
+    min-width: 0;
+  }
+  .update .go {
+    flex: none;
+    border: none;
+    border-radius: var(--r-pill);
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    cursor: pointer;
+  }
+  .update .hide {
+    flex: none;
+    display: inline-flex;
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 4px;
+    cursor: pointer;
   }
 
   .version {

@@ -123,6 +123,18 @@ func init() {
 		}),
 		"GetLogLevel": func(a *application, _ json.RawMessage) (any, error) { return a.core.GetLogLevel(), nil },
 		"SetLogLevel": arg1(func(a *application, level string) (any, error) { return nil, a.core.SetLogLevel(level) }),
+
+		// --- приложения мимо VPN (только Android) ---
+		"GetExcludedApps": func(a *application, _ json.RawMessage) (any, error) { return a.core.GetExcludedApps(), nil },
+		"SetExcludedApps": decode1(func(a *application, pkgs []string) (any, error) {
+			return nil, a.core.SetExcludedApps(pkgs)
+		}),
+
+		// --- обновления ---
+		"CheckUpdate": func(a *application, _ json.RawMessage) (any, error) { return a.core.CheckUpdate() },
+		"SetUpdateCheck": arg1b(func(a *application, on bool) (any, error) {
+			return nil, a.core.SetUpdateCheck(on)
+		}),
 	}
 }
 

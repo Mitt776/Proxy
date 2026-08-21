@@ -76,4 +76,14 @@ dependencies {
     // жеста интерфейс получает переменными CSS (см. MainActivity.applyInsets), а
     // платформенный WindowInsets менял форму трижды за эти версии.
     implementation("androidx.core:core:1.15.0")
+
+    // CameraX — только ради сканера QR. Сам распознаватель наш (Go, backend/appcore),
+    // поэтому ML Kit и его зависимость от сервисов Google в APK не тянутся.
+    // camera-lifecycle требует LifecycleOwner, отсюда androidx.activity: обычная
+    // android.app.Activity им не является.
+    val camerax = "1.4.2"
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
+    implementation("androidx.activity:activity:1.9.3")
 }

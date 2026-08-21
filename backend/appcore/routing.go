@@ -30,6 +30,9 @@ func (c *Core) ConfigOptions(nodes []config.Node, enableTUN bool) config.Options
 		Mode:         cr.Mode,
 		BlockQUIC:    !cr.AllowQUIC,
 		CacheDBPath:  "cache.db",
+		// На Windows список всегда пуст: приложения «мимо VPN» существуют только
+		// там, где туннель выдаёт VpnService.
+		ExcludePackage: cr.ExcludedApps,
 	}
 	if c.paths != nil {
 		opts.RuleSetDir = c.paths.AssetsDir

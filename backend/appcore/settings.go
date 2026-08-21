@@ -1,6 +1,7 @@
 package appcore
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -33,6 +34,38 @@ func (c *Core) RememberTUN(enableTUN bool) {
 		return
 	}
 	_ = c.settings.Update(func(s *settings.Settings) { s.EnableTUN = enableTUN })
+}
+
+// GetExcludedApps возвращает пакеты, которые ходят мимо туннеля.
+func (c *Core) GetExcludedApps() []string {
+	if c.settings == nil {
+		return nil
+	}
+	return c.settings.Get().ExcludedApps
+}
+
+// SetExcludedApps сохраняет список приложений мимо туннеля.
+//
+// К живому соединению список не применяется: набор исключений задаётся при
+// вызове VpnService.Builder.establish(), то есть в момент открытия туннеля.
+// Перезапускать ядро молча за спиной пользователя не будем — интерфейс говорит
+// прямо, что изменения вступят в силу при следующем подключении.
+func (c *Core) SetExcludedApps(packages []string) error {
+	if c.settings == nil {
+		return nil
+	}
+	clean := make([]string, 0, len(packages))
+	seen := make(map[string]bool, len(packages))
+	for _, p := range packages {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		clean = append(clean, p)
+	}
+	sort.Strings(clean)
+	return c.settings.Update(func(s *settings.Settings) { s.ExcludedApps = clean })
 }
 
 // --- Язык интерфейса ---

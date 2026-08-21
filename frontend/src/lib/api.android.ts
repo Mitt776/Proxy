@@ -187,3 +187,38 @@ export const SetBlockQUIC = (block: boolean) => call<void>("SetBlockQUIC", block
 export const SetSubUpdateHours = (hours: number) => call<void>("SetSubUpdateHours", hours);
 export const GetLogLevel = () => call<string>("GetLogLevel");
 export const SetLogLevel = (level: string) => call<void>("SetLogLevel", level);
+
+export const GetExcludedApps = () => call<string[]>("GetExcludedApps");
+export const SetExcludedApps = (packages: string[]) => call<void>("SetExcludedApps", packages);
+
+export const CheckUpdate = () =>
+  call<{ available: boolean; version: string; url: string; notes: string }>("CheckUpdate");
+export const SetUpdateCheck = (on: boolean) => call<void>("SetUpdateCheck", on);
+
+// --- то, что делает сама Kotlin ---
+//
+// Эти методы не доезжают до Go-диспетчера: их перехватывает Bridge, потому что
+// каждый открывает системный экран (пикер картинки, камеру, список приложений)
+// и отвечает только после того, как пользователь оттуда вернулся. Протокол тот
+// же самый — ответ приходит в __mitmResolve по тому же id.
+
+/** Выбрать картинку из галереи и завести профиль по QR. «» — отменено. */
+export const PickQRImage = () => call<string>("PickQRImage");
+
+/** Навести камеру на QR и завести профиль. «» — отменено. */
+export const ScanQR = () => call<string>("ScanQR");
+
+/**
+ * Установленные приложения с иконками — для выбора тех, что пойдут мимо VPN.
+ * Список рисуем сами в WebView, как на Windows это делает выбор процесса: так у
+ * экрана те же токены оформления и та же двуязычность, а не вторая вёрстка на
+ * Kotlin, которую пришлось бы переводить отдельно.
+ */
+export const ListApps = () =>
+  call<{ package: string; label: string; icon: string; system: boolean }[]>("ListApps");
+
+/** Открыть ссылку в браузере телефона. */
+export const OpenURL = (url: string) => call<void>("OpenURL", url);
+
+// ImportQRImage (файловый диалог Windows) здесь отсутствует намеренно: картинку
+// приносит системный пикер, см. PickQRImage.

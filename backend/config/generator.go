@@ -267,6 +267,9 @@ func buildInbounds(opts Options) ([]json.RawMessage, error) {
 			Stack:                  opts.TUNStack,
 			MTU:                    9000,
 			EndpointIndependentNAT: true,
+			// Приложения «мимо VPN» (Android). Ядро само по пакетам не фильтрует —
+			// оно лишь передаёт список платформе, а исключения делает VpnService.
+			ExcludePackage: opts.ExcludePackage,
 		}
 		if err := appendJSON(&in, tun); err != nil {
 			return nil, err

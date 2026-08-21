@@ -45,6 +45,8 @@ const (
 	ErrSetNotFound = "E_SET_NOT_FOUND" // набор правил не найден по ID
 	ErrSetNotList  = "E_SET_NOT_LIST"  // операция только для текстовых списков (.lst)
 	ErrSetFetch    = "E_SET_FETCH"     // список правил не скачался или оказался пустым
+
+	ErrUpdateCheck = "E_UPDATE_CHECK" // не удалось спросить GitHub о новой версии
 )
 
 // CodedErr собирает ошибку с кодом. Русский текст остаётся фолбэком на случай,

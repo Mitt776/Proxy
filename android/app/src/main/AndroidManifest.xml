@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -8,6 +9,20 @@
          путь для VPN-клиентов — specialUse. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Только для сканера QR; спрашивается прямо перед съёмкой. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Без этого с Android 11 getInstalledApplications() возвращает лишь горстку
+         пакетов: система прячет чужие приложения, пока их не перечислили в
+         <queries> поимённо. Перечислить нельзя — список «мимо VPN» по определению
+         про любое приложение на устройстве, и заранее мы их не знаем.
+         Ограничение Google Play на это разрешение нас не касается: приложение
+         распространяется APK, в магазин не идёт (см. план порта). -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <!-- Без камеры приложение полностью работоспособно: профиль импортируется
+         из буфера, из галереи и вводом ссылки. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- enableOnBackInvokedCallback="false" — намеренно старый onBackPressed вместо
          предиктивного «назад»: у приложений с targetSdk 35+ система иначе
@@ -38,6 +53,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".QrScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|density" />
 
         <service
             android:name=".TunnelService"
