@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 
@@ -160,8 +161,51 @@ func setTrayTitle(item *systray.MenuItem, title, tip string) {
 
 // runTray запускает иконку в трее. energye/systray держит собственный цикл
 // сообщений, поэтому вызывается из отдельной горутины.
+//
+// Горутина обязана быть прибита к своему потоку ОС. Окно трея создаёт она же
+// (systray.Run → initInstance), а очередь сообщений в Windows принадлежит потоку:
+// GetMessage/DispatchMessage должны идти в том же потоке, что создал окно.
+// `runtime.LockOSThread` внутри самого systray делается в его `init`, то есть
+// привязывает главную горутину, а не нашу. Без привязки планировщик Go волен
+// продолжить горутину на другом потоке после блокирующего GetMessage (он висит
+// секундами, sysmon отбирает P, и вернуть тот же поток при выходе из syscall уже
+// не всегда возможно) — с этого момента цикл разгребает чужую пустую очередь,
+// а сообщения трея не читает никто: иконка на месте, но не реагирует ни на
+// клики, ни на меню, и даже systray.Quit (он шлёт WM_CLOSE в ту же очередь) не
+// работает — приложение остаётся снимать диспетчером задач.
+//
+// UnlockOSThread не делаем намеренно: поток должен умереть вместе с горутиной,
+// а не вернуться в пул с чужим окном и его очередью на шее.
 func (a *App) runTray() {
+	goruntime.LockOSThread()
 	systray.Run(a.onTrayReady, nil)
+}
+
+// trayBusy — по трею уже идёт длительное действие.
+var trayBusy atomic.Bool
+
+// trayOp выполняет действие пункта меню вне потока трея.
+//
+// energye/systray зовёт обработчик клика прямо из оконной процедуры, то есть
+// внутри цикла сообщений. Всё, что делается в обработчике, замораживает иконку
+// целиком, а действия у нас не мгновенные: `Connect` генерирует конфиг, гоняет
+// `sing-box check` (отдельный процесс) и поднимает ядро, `Disconnect` ждёт
+// фактической смерти процесса, смена профиля перезапускает ядро, смена режима —
+// это HTTP к Clash API с таймаутом в 10 с. Худший случай — TUN без прав
+// администратора: `Connect` показывает UAC-диалог и ждёт ответа пользователя
+// сколько угодно, а трей всё это время мёртв вместе с пунктом «Выход».
+//
+// Флаг восстанавливает сериализацию, которую раньше бесплатно давал цикл
+// сообщений: два быстрых нажатия «Подключить» иначе ушли бы в два параллельных
+// старта ядра на одни и те же порты 2080/9090.
+func trayOp(fn func()) {
+	if !trayBusy.CompareAndSwap(false, true) {
+		return // предыдущее действие ещё не завершилось
+	}
+	go func() {
+		defer trayBusy.Store(false)
+		fn()
+	}()
 }
 
 func (a *App) onTrayReady() {
@@ -188,9 +232,11 @@ func (a *App) onTrayReady() {
 		item := mMode.AddSubMenuItemCheckbox(m.title, m.tip, false)
 		mode := m.mode
 		item.Click(func() {
-			if err := a.SetMode(mode); err == nil {
-				updateTrayMode(mode)
-			}
+			trayOp(func() {
+				if err := a.SetMode(mode); err == nil {
+					updateTrayMode(mode)
+				}
+			})
 		})
 		modes[m.mode] = item
 	}
@@ -215,18 +261,24 @@ func (a *App) onTrayReady() {
 	trayQuitItem = mQuit
 	trayMu.Unlock()
 
-	mShow.Click(func() { runtime.WindowShow(a.ctx) })
+	// Все обработчики уходят с потока трея (см. trayOp). «Показать» и «Выход»
+	// без флага занятости: они обязаны работать и тогда, когда в трее уже идёт
+	// подключение, — иначе зависшее действие снова оставит пользователя без
+	// способа закрыть приложение.
+	mShow.Click(func() { go runtime.WindowShow(a.ctx) })
 	connect.Click(func() {
-		enableTUN := false
-		if a.core != nil {
-			enableTUN = a.core.GetSettings().EnableTUN
-		}
-		_ = a.Connect(enableTUN)
+		trayOp(func() {
+			enableTUN := false
+			if a.core != nil {
+				enableTUN = a.core.GetSettings().EnableTUN
+			}
+			_ = a.Connect(enableTUN)
+		})
 	})
-	disconnect.Click(func() { _ = a.Disconnect() })
+	disconnect.Click(func() { trayOp(func() { _ = a.Disconnect() }) })
 	mQuit.Click(func() {
 		a.trayQuit.Store(true)
-		runtime.Quit(a.ctx)
+		go runtime.Quit(a.ctx)
 	})
 
 	trayReady.Store(true)
@@ -257,13 +309,15 @@ func (a *App) rebuildTrayProfiles() {
 	for i := len(trayProfileItems); i < len(profiles); i++ {
 		item := trayProfiles.AddSubMenuItemCheckbox("", "", false)
 		item.Click(func() {
-			trayMu.Lock()
-			id := trayProfileIDs[item]
-			trayMu.Unlock()
-			if id == "" {
-				return
-			}
-			_ = a.SetActiveProfile(id) // он же перестроит подменю
+			trayOp(func() {
+				trayMu.Lock()
+				id := trayProfileIDs[item]
+				trayMu.Unlock()
+				if id == "" {
+					return
+				}
+				_ = a.SetActiveProfile(id) // он же перестроит подменю
+			})
 		})
 		trayProfileItems = append(trayProfileItems, item)
 	}
