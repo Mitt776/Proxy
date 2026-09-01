@@ -140,9 +140,19 @@ type mixedInbound struct {
 }
 
 type tunInbound struct {
-	Type                   string   `json:"type"`
-	Tag                    string   `json:"tag"`
-	Address                []string `json:"address"`
+	Type    string   `json:"type"`
+	Tag     string   `json:"tag"`
+	Address []string `json:"address"`
+	// DNSAddress — адрес, на который платформа обязана слать DNS. Заполняется
+	// только на Android (см. tundns_android.go). Без него VpnService не объявляет
+	// системе ни одного DNS-сервера, Android оставляет приложениям резолвер нижней
+	// сети — роутера или оператора, — и на заблокированный домен приезжает
+	// подставной адрес (fake-ip роутера, заглушка провайдера). Мы его честно
+	// тащим в туннель, а на выходной ноде он не значит ничего: соединение рвётся
+	// сразу, хотя сам туннель жив и по настоящему IP тот же сайт открывается.
+	// Штатный sing-box поля не знает и падает на «unknown field», поэтому на
+	// Windows оно обязано отсутствовать.
+	DNSAddress             []string `json:"dns_address,omitempty"`
 	AutoRoute              bool     `json:"auto_route"`
 	StrictRoute            bool     `json:"strict_route"`
 	AutoRedirect           bool     `json:"auto_redirect,omitempty"`

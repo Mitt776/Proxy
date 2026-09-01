@@ -33,7 +33,7 @@ android {
         // major*10000 + minor*100 + patch (2.1.0 → 20100). Android сравнивает версии
         // исключительно по этому числу, и не возросшее означает «обновления нет» —
         // разъехаться с versionName ему нельзя.
-        versionName = "2.1.2"
+        versionName = "2.1.3"
         versionCode = versionName!!.split(".").map(String::toInt)
             .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
 

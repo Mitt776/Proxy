@@ -264,3 +264,46 @@ func TestListRuleSetValidates(t *testing.T) {
 	}
 	t.Log("✅ набор из .lst принят обоими ядрами; поддомены ловятся, соседи по имени — нет")
 }
+
+// TestTunDNSAddressBothCores закрывает поле `dns_address` tun-инбаунда — оно
+// платформенное, и обе его стороны обязаны быть проверены живыми ядрами.
+//
+// Расхождение схем тут не теоретическое: штатный sing-box поля не знает и
+// отвергает конфиг целиком («unknown field»), то есть подключение на Windows
+// перестало бы работать вовсе. Поэтому проверяем и то, что генератор его на
+// не-Android не выдаёт, и то, что форк (ядро Android) его принимает.
+func TestTunDNSAddressBothCores(t *testing.T) {
+	assets := os.Getenv("PROXY_ASSETS")
+
+	// 1. Обычная сборка не должна выдавать поле — иначе штатное ядро упадёт.
+	cfg, err := Generate(Options{EnableTUN: true, RuleSetDir: assets, ClashSecret: "x"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(string(cfg), "dns_address") != (tunDNSAddress != "") {
+		t.Fatalf("dns_address в конфиге не соответствует платформе (tunDNSAddress=%q):\n%s",
+			tunDNSAddress, cfg)
+	}
+	checkConfig(t, Options{EnableTUN: true})
+
+	// 2. Конфиг в том виде, в каком его получит ядро на Android, обязан
+	// приниматься форком: там значение константы непустое.
+	androidCfg := strings.Replace(string(cfg), `"address": [`,
+		`"dns_address": ["172.19.0.2"],`+"\n      "+`"address": [`, 1)
+	if !strings.Contains(androidCfg, "dns_address") {
+		t.Fatal("не удалось собрать android-вариант конфига: якорь не найден")
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(androidCfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fork := filepath.Join(assets, "sing-box-xhttp.exe")
+	if _, err := os.Stat(fork); err != nil {
+		t.Skip("форка с XHTTP нет в ассетах")
+	}
+	out, err := exec.Command(fork, "check", "-c", cfgPath, "-D", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("форк отверг dns_address: %v\n%s\n---config---\n%s", err, out, androidCfg)
+	}
+}

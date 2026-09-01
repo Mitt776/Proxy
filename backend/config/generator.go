@@ -267,6 +267,11 @@ func buildInbounds(opts Options) ([]json.RawMessage, error) {
 			Stack:                  opts.TUNStack,
 			MTU:                    9000,
 			EndpointIndependentNAT: true,
+			// Android обязан получить свой DNS-сервер, иначе система оставит
+			// приложениям резолвер нижней сети (см. tundns_android.go). На
+			// остальных платформах константа пуста и поля в конфиге не будет:
+			// штатное ядро его не знает и отвергает конфиг целиком.
+			DNSAddress: tunDNSAddresses(),
 			// Приложения «мимо VPN» (Android). Ядро само по пакетам не фильтрует —
 			// оно лишь передаёт список платформе, а исключения делает VpnService.
 			ExcludePackage: opts.ExcludePackage,
@@ -288,4 +293,14 @@ func appendJSON(dst *[]json.RawMessage, values ...interface{}) error {
 		*dst = append(*dst, raw)
 	}
 	return nil
+}
+
+// tunDNSAddresses — список DNS-адресов для tun-инбаунда. Пустой на всех
+// платформах, кроме Android: там ядро форковое и поле понимает, а штатный
+// sing-box на Windows отверг бы конфиг целиком.
+func tunDNSAddresses() []string {
+	if tunDNSAddress == "" {
+		return nil
+	}
+	return []string{tunDNSAddress}
 }
