@@ -91,6 +91,24 @@ func (a *App) Emit(name string, payload any) {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, name, payload)
 	}
+	// О новой версии окно узнаёт полоской над содержимым — но окно чаще всего
+	// свёрнуто в трей (автозапуск, закрытие крестиком), и полоску там никто не
+	// увидит. Дублируем находку системным уведомлением: единственная точка, через
+	// которую события ядра проходят на десктопе, — здесь, а на Android свой Emit
+	// и своя полоска, этой ветки там нет.
+	if name == "update:available" && a.core != nil {
+		if info, ok := payload.(appcore.UpdateInfo); ok {
+			trayNotify(appName+" "+info.Version, updateToastBody(a.core.CurrentLang(), info.Version))
+		}
+	}
+}
+
+// updateToastBody — текст системного уведомления о новой версии.
+func updateToastBody(lang, version string) string {
+	if lang == "en" {
+		return "Version " + version + " is available. Open Settings to download."
+	}
+	return "Доступна версия " + version + ". Открой «Настройки», чтобы скачать."
 }
 
 // Logf пишет в журнал Wails.
@@ -169,6 +187,11 @@ func (a *App) startup(ctx context.Context) {
 
 	// Фоновое автообновление подписок по расписанию.
 	a.core.StartSubScheduler()
+
+	// Проверка обновлений (2.1.5+): магазина нет, портативный архив сам о себе не
+	// сообщит. Раз в сутки спрашивает GitHub и эмитит update:available (полоска в
+	// окне + системное уведомление, см. Emit).
+	a.core.StartUpdateScheduler()
 
 	// Перезапущены с повышением прав ради TUN — сразу поднимаем активный профиль.
 	if hasFlag(tunAutostartFlag) {
@@ -662,6 +685,12 @@ func (a *App) LANProxyAddresses() []string {
 
 // SetSubUpdateHours задаёт интервал автообновления подписок (0 — выключить).
 func (a *App) SetSubUpdateHours(hours int) error { return a.core.SetSubUpdateHours(hours) }
+
+// CheckUpdate спрашивает GitHub о новой версии прямо сейчас (кнопка в настройках).
+func (a *App) CheckUpdate() (appcore.UpdateInfo, error) { return a.core.CheckUpdate() }
+
+// SetUpdateCheck включает/выключает ежесуточную проверку обновлений.
+func (a *App) SetUpdateCheck(on bool) error { return a.core.SetUpdateCheck(on) }
 
 // ExternalIP запрашивает внешний IP и страну через локальный прокси.
 func (a *App) ExternalIP() (appcore.IPInfo, error) { return a.core.ExternalIP() }

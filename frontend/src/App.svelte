@@ -4,12 +4,14 @@
   // первичная загрузка и переключение разделов.
   import { onMount } from "svelte";
   import { GetAppInfo, GetActiveProfileID, ListProfiles } from "$api";
-  import { EventsOn } from "$api";
+  import { EventsOn, OpenURL } from "$api";
   import "./lib/ui.css";
 
   import Splash from "./lib/shell/Splash.svelte";
   import TitleBar from "./lib/shell/TitleBar.svelte";
   import Sidebar from "./lib/shell/Sidebar.svelte";
+  import Icon from "./lib/icons/Icon.svelte";
+  import { t } from "./lib/i18n";
   import type { Tab } from "./lib/shell/tabs";
   import type { AppInfo } from "./lib/types";
 
@@ -47,9 +49,16 @@
 
   let profileName = "";
 
+  /** Найденное обновление — полоска под шапкой. Закрывается на сессию. */
+  let update: { version: string; url: string } | null = null;
+
   onMount(async () => {
     info = await GetAppInfo();
     initLang(info.lang);
+
+    // Магазина нет, портативный архив сам о себе не сообщит. Полоску показываем
+    // по событию из Go; окно в трее об этом узнаёт системным уведомлением.
+    EventsOn("update:available", (u: { version: string; url: string }) => (update = u));
 
     // Автозапуск в трей: окна не видно, крутить заставку не для кого — а при
     // показе из трея она бы только раздражала.
@@ -72,6 +81,17 @@
 
 <div class="app">
   <TitleBar bind:slotEl={markSlot} {markVisible} />
+
+  {#if update}
+    <div class="update">
+      <Icon name="download" size={15} />
+      <span>{$t("update.ready", { v: update.version })}</span>
+      <button class="go" on:click={() => OpenURL(update.url)}>{$t("update.open")}</button>
+      <button class="hide" aria-label={$t("common.close")} on:click={() => (update = null)}>
+        <Icon name="close" size={14} />
+      </button>
+    </div>
+  {/if}
 
   <div class="body">
     <Sidebar bind:tab {profileName} isAdmin={info.isAdmin} coreFound={info.coreFound} />
@@ -122,6 +142,45 @@
     position: relative;
     flex: 1;
     min-height: 0;
+  }
+
+  /* Полоска обновления — между шапкой и содержимым, не поверх: появляется редко
+     и не должна перекрывать ни сайдбар, ни кнопку подключения. */
+  .update {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 8px var(--s-4);
+    background: var(--accent-dim);
+    border-bottom: 1px solid var(--accent);
+    color: var(--accent-2);
+    font-size: 12.5px;
+  }
+  .update span {
+    flex: 1;
+    min-width: 0;
+  }
+  .update .go {
+    flex: none;
+    border: none;
+    border-radius: var(--r-pill);
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    cursor: pointer;
+  }
+  .update .hide {
+    flex: none;
+    display: inline-flex;
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 4px;
+    cursor: pointer;
   }
 
   main {

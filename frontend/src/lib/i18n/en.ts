@@ -306,6 +306,16 @@ export const en: Record<string, string> = {
   "settings.coreHint":
     "The sing-box-lx fork is needed for nodes using the XHTTP transport — the stock core does not understand them. A core change applies on the next connection.",
 
+  "settings.updates": "Check for updates",
+  "settings.updatesHint": "Ask GitHub about a new version once a day",
+  "settings.checkNow": "Check now",
+  "settings.updateFound": "Version {v} is available",
+  "settings.updateNone": "You are on the latest version",
+  "settings.updateOpen": "Open",
+
+  "update.ready": "A new version is available — {v}",
+  "update.open": "Open the release page",
+
   "settings.about": "About",
   "settings.version": "Version",
   "settings.coreVersion": "Core",

@@ -6,12 +6,14 @@
   import {
     GetSettings, GetAutostart, SetAutostart, SetMinimizeToTray, SetBlockQUIC,
     SetAllowLAN, SetStrictRoute, LANProxyAddresses,
-    SetSubUpdateHours, PickCoreFile, ResetCorePath, GetAppInfo,
+    SetSubUpdateHours, CheckUpdate, SetUpdateCheck, OpenURL,
+    PickCoreFile, ResetCorePath, GetAppInfo,
   } from "$api";
   import Icon from "./icons/Icon.svelte";
   import TabHead from "./shell/TabHead.svelte";
   import { connected, reportError } from "./store";
-  import { t, lang, setLang } from "./i18n";
+  import { t, tr, lang, setLang } from "./i18n";
+  import { errText } from "./i18n/errors";
   import type { Lang } from "./i18n";
   import type { AppInfo } from "./types";
 
@@ -31,6 +33,11 @@
   // тянем только когда доступ открыт: пока прокси на loopback, показывать нечего.
   let lanAddrs: string[] = [];
 
+  let updateCheck = true;
+  let checking = false;
+  let updateNote = "";
+  let updateURL = "";
+
   onMount(async () => {
     try {
       const s = await GetSettings();
@@ -39,12 +46,33 @@
       allowLAN = s.allowLan;
       strictRoute = !s.disableStrictRoute;
       subUpdateHours = s.subUpdateHours || 0;
+      updateCheck = !s.noUpdateCheck;
       autostart = await GetAutostart();
       if (allowLAN) refreshLAN();
     } catch (e) {
       reportError(e);
     }
   });
+
+  // Ручная проверка мимо расписания и выключателя: пользователь нажал кнопку —
+  // спрашиваем GitHub сейчас. Ошибку показываем текстом рядом, а не тостом:
+  // «нет сети» здесь ожидаемый исход, а не сбой.
+  async function checkNow() {
+    checking = true;
+    updateNote = "";
+    updateURL = "";
+    try {
+      const upd = await CheckUpdate();
+      updateNote = upd.available
+        ? tr("settings.updateFound", { v: upd.version })
+        : tr("settings.updateNone");
+      if (upd.available) updateURL = upd.url;
+    } catch (e) {
+      updateNote = errText(e);
+    } finally {
+      checking = false;
+    }
+  }
 
   async function refreshLAN() {
     try {
@@ -250,7 +278,39 @@
     <section class="panel sec">
       <div class="sec-h"><Icon name="info" size={14} />{$t("settings.about")}</div>
 
-      <div class="facts">
+      <div class="opt">
+        <div class="txt">
+          <div class="ttl">{$t("settings.updates")}</div>
+          <div class="hint">{$t("settings.updatesHint")}</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={updateCheck}
+                 on:change={() => save(
+                   () => SetUpdateCheck(updateCheck),
+                   () => (updateCheck = !updateCheck),
+                 )} />
+          <span class="track"></span>
+        </label>
+      </div>
+
+      <div class="opt">
+        <div class="txt">
+          <div class="ttl">{$t("settings.checkNow")}</div>
+          {#if updateNote}<div class="hint">{updateNote}</div>{/if}
+        </div>
+        <div class="ctl">
+          {#if updateURL}
+            <button class="btn sm primary" on:click={() => OpenURL(updateURL)}>
+              {$t("settings.updateOpen")}
+            </button>
+          {/if}
+          <button class="btn sm" on:click={checkNow} disabled={checking}>
+            {checking ? $t("common.loading") : $t("common.refresh")}
+          </button>
+        </div>
+      </div>
+
+      <div class="facts about">
         <span class="k">{$t("settings.version")}</span>
         <span class="v mono">{info.appVersion}</span>
         <span class="k">{$t("settings.coreVersion")}</span>
@@ -323,6 +383,9 @@
     align-items: baseline;
     padding: var(--s-1) 0 var(--s-3);
   }
+  /* Таблица фактов идёт после строк «Проверять обновления»/«Проверить сейчас» —
+     отделяем её линией, как соседние .opt отделены друг от друга. */
+  .facts.about { border-top: 1px solid var(--line); padding-top: var(--s-3); margin-top: var(--s-1); }
   .k { font-size: 12px; color: var(--muted); }
   .v { font-size: 12px; color: var(--text-2); }
   .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

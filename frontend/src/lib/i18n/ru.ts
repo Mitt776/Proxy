@@ -307,6 +307,16 @@ export const ru: Record<string, string> = {
   "settings.coreHint":
     "Форк sing-box-lx нужен для нод с транспортом XHTTP — штатное ядро их не понимает. Смена ядра применяется при следующем подключении.",
 
+  "settings.updates": "Проверять обновления",
+  "settings.updatesHint": "Раз в сутки спрашиваем GitHub о новой версии",
+  "settings.checkNow": "Проверить сейчас",
+  "settings.updateFound": "Доступна версия {v}",
+  "settings.updateNone": "Установлена последняя версия",
+  "settings.updateOpen": "Открыть",
+
+  "update.ready": "Доступна новая версия — {v}",
+  "update.open": "Открыть страницу релиза",
+
   "settings.about": "О программе",
   "settings.version": "Версия",
   "settings.coreVersion": "Ядро",

@@ -62,10 +62,7 @@ export function SetExcludedApps(_packages: string[]): Promise<void> {
   return Promise.reject(new Error("[E_NO_METHOD] выбор приложений доступен только на Android"));
 }
 
-export function CheckUpdate(): Promise<{ available: boolean; version: string; url: string }> {
-  return Promise.reject(new Error("[E_NO_METHOD] проверка обновлений пока только на Android"));
-}
-
-export function SetUpdateCheck(_on: boolean): Promise<void> {
-  return Promise.reject(new Error("[E_NO_METHOD] проверка обновлений пока только на Android"));
-}
+// CheckUpdate / SetUpdateCheck — настоящие методы App, приезжают из wailsjs
+// реэкспортом выше. Заглушек больше нет: проверка обновлений работает и на
+// Windows (app.go зовёт StartUpdateScheduler, находку показывает полоской и
+// системным уведомлением).
