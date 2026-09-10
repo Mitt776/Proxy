@@ -25,6 +25,14 @@ type Options struct {
 	EnableTUN bool   // добавить tun inbound (полный перехват)
 	TUNStack  string // gvisor|system|mixed
 
+	// AllowLAN — слушать mixed-inbound на всех интерфейсах, а не на loopback:
+	// прокси становится доступен другим устройствам сети (settings.AllowLAN).
+	AllowLAN bool
+
+	// NoStrictRoute снимает strict_route у tun-инбаунда (settings.DisableStrictRoute).
+	// Инверсия: нулевое значение = строгая маршрутизация, как было всегда.
+	NoStrictRoute bool
+
 	// ExcludePackage — пакеты Android, которым туннель не достаётся. На Windows
 	// всегда пусто: сам список приложений там взять неоткуда, а поле ядро на этой
 	// платформе игнорирует. Едет через конфиг, а не отдельным каналом в Kotlin,

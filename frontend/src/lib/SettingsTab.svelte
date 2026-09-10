@@ -5,6 +5,7 @@
   import { onMount, createEventDispatcher } from "svelte";
   import {
     GetSettings, GetAutostart, SetAutostart, SetMinimizeToTray, SetBlockQUIC,
+    SetAllowLAN, SetStrictRoute, LANProxyAddresses,
     SetSubUpdateHours, PickCoreFile, ResetCorePath, GetAppInfo,
   } from "$api";
   import Icon from "./icons/Icon.svelte";
@@ -23,19 +24,52 @@
   let autostart = false;
   let minimizeToTray = true;
   let blockQUIC = true;
+  let allowLAN = false;
+  let strictRoute = true;
   let subUpdateHours = 0;
+  // Адреса этой машины в локальных сетях — их вписывают на телефоне. Список
+  // тянем только когда доступ открыт: пока прокси на loopback, показывать нечего.
+  let lanAddrs: string[] = [];
 
   onMount(async () => {
     try {
       const s = await GetSettings();
       minimizeToTray = s.minimizeToTray;
       blockQUIC = !s.allowQuic;
+      allowLAN = s.allowLan;
+      strictRoute = !s.disableStrictRoute;
       subUpdateHours = s.subUpdateHours || 0;
       autostart = await GetAutostart();
+      if (allowLAN) refreshLAN();
     } catch (e) {
       reportError(e);
     }
   });
+
+  async function refreshLAN() {
+    try {
+      lanAddrs = allowLAN ? await LANProxyAddresses() : [];
+    } catch (e) {
+      lanAddrs = [];
+      reportError(e);
+    }
+  }
+
+  // Открытие прокси наружу меняет конфиг ядра, поэтому на живом соединении Go
+  // перезапускает ядро. Не принял — тумблер возвращаем на место: показывать
+  // включённым то, чего в работающем ядре нет, хуже, чем не включить вовсе.
+  async function toggleLAN() {
+    await save(
+      async () => {
+        await SetAllowLAN(allowLAN);
+        await refreshLAN();
+      },
+      () => {
+        allowLAN = !allowLAN;
+        lanAddrs = [];
+      },
+    );
+  }
 
   async function save(fn: () => Promise<unknown>, rollback?: () => void) {
     try {
@@ -123,6 +157,51 @@
         <label class="toggle">
           <input type="checkbox" bind:checked={blockQUIC}
                  on:change={() => save(() => SetBlockQUIC(blockQUIC))} />
+          <span class="track"></span>
+        </label>
+      </div>
+
+      <div class="opt">
+        <div class="txt">
+          <div class="ttl">{$t("settings.lan")}</div>
+          <div class="hint">{$t("settings.lanHint")}</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={allowLAN} on:change={toggleLAN} />
+          <span class="track"></span>
+        </label>
+      </div>
+
+      {#if allowLAN}
+        <div class="opt sub">
+          <div class="txt">
+            <div class="ttl">{$t("settings.lanAddrs")}</div>
+            {#if lanAddrs.length}
+              <div class="addrs">
+                {#each lanAddrs as a}<span class="pill mono">{a}</span>{/each}
+              </div>
+              <div class="hint">{$t("settings.lanAddrsHint")}</div>
+            {:else}
+              <div class="hint">{$t("settings.lanNone")}</div>
+            {/if}
+          </div>
+          <button class="icon-btn" title={$t("common.refresh")} on:click={refreshLAN}>
+            <Icon name="refresh" size={14} />
+          </button>
+        </div>
+      {/if}
+
+      <div class="opt">
+        <div class="txt">
+          <div class="ttl">{$t("settings.strict")}</div>
+          <div class="hint">{$t("settings.strictHint")}</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" bind:checked={strictRoute}
+                 on:change={() => save(
+                   () => SetStrictRoute(strictRoute),
+                   () => (strictRoute = !strictRoute),
+                 )} />
           <span class="track"></span>
         </label>
       </div>
@@ -224,6 +303,14 @@
   .ttl { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
   .txt .hint { margin-top: 2px; }
   .ctl { display: flex; align-items: center; gap: var(--s-2); flex: none; }
+
+  /* Строка-приложение к тумблеру выше: отступ слева показывает подчинённость,
+     а верхнюю границу убираем — визуально это продолжение той же настройки. */
+  .opt.sub { padding-left: var(--s-3); border-top: none; }
+  .addrs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+  /* Адрес — значение, а не текст подсказки: его переписывают руками в настройки
+     телефона, поэтому даём его выделить мышью. */
+  .addrs .pill { user-select: text; }
 
   .num { width: 66px; text-align: center; padding: 6px 8px; }
   .unit { font-size: 12px; color: var(--muted); }

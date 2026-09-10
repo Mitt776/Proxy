@@ -35,7 +35,10 @@ func main() {
 	// перезапуск с повышением прав ради TUN: это наш же процесс, и предка мы уже
 	// дождались выше. Если он всё-таки завис, стартуем всё равно — остаться без TUN
 	// хуже, чем показать вторую копию на те секунды, что предок ещё жив.
-	if !system.ClaimSingleInstance(app.onSecondInstance) && !hasFlag(tunAutostartFlag) {
+	// Генератор биндингов Wails — тоже запуск этого бинаря, и лок его убивал бы
+	// молча: при работающем MitM сборка оставляла старые frontend/wailsjs и падала
+	// потом на фронтенде (см. bindings_tag.go).
+	if !buildingBindings && !system.ClaimSingleInstance(app.onSecondInstance) && !hasFlag(tunAutostartFlag) {
 		return
 	}
 

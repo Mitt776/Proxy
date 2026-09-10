@@ -224,6 +224,36 @@ func TestLogLevelsValidate(t *testing.T) {
 	t.Log("✅ уровни журнала trace…error приняты обоими ядрами")
 }
 
+// TestLANAndStrictRouteValidate — прокси, открытый в локальную сеть (AllowLAN), и
+// снятая строгая маршрутизация TUN. Оба флага меняют уже существующие поля
+// (listen у mixed, strict_route у tun), но проверить их обоими ядрами всё равно
+// надо: конфиг с ошибкой в инбаунде не даст подключиться вовсе, а сценарий
+// «раздаю Wi-Fi» проверяется только там, где этот Wi-Fi есть.
+func TestLANAndStrictRouteValidate(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		allowLAN      bool
+		enableTUN     bool
+		noStrictRoute bool
+	}{
+		{name: "lan-proxy", allowLAN: true},
+		{name: "lan-proxy+tun", allowLAN: true, enableTUN: true},
+		{name: "tun-loose-route", enableTUN: true, noStrictRoute: true},
+		{name: "lan-proxy+tun-loose-route", allowLAN: true, enableTUN: true, noStrictRoute: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			checkConfig(t, Options{
+				Nodes:         []Node{ruleTestNode(t)},
+				AllowLAN:      c.allowLAN,
+				EnableTUN:     c.enableTUN,
+				NoStrictRoute: c.noStrictRoute,
+				Routing:       rules.Default(),
+			})
+		})
+	}
+	t.Log("✅ AllowLAN и снятый strict_route приняты обоими ядрами")
+}
+
 // TestListRuleSetValidates — набор из текстового списка (.lst) уезжает в конфиг
 // локальным source-набором. Проверяем и то, что ядро принимает такой конфиг, и
 // то, что оно действительно матчит по нему домены: семантику domain_suffix

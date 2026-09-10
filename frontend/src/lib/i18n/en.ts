@@ -282,6 +282,16 @@ export const en: Record<string, string> = {
   "settings.quic": "Block QUIC in TUN mode",
   "settings.quicHint":
     "Forces the browser onto TCP instead of HTTP/3. Required for TCP nodes (vless-vision, xhttp) — otherwise Google and YouTube break under TUN.",
+  "settings.lan": "Allow access from local network",
+  "settings.lanHint":
+    "The proxy starts listening on every interface instead of this computer only: the address below can be entered in a phone's Wi-Fi settings — including devices connected to a hotspot shared from this computer. The proxy has no password, so turn this off on someone else's network (a café, a hotel).",
+  "settings.lanAddrs": "Address for other devices",
+  "settings.lanAddrsHint":
+    "HTTP and SOCKS5 share the port. On the first connection Windows asks whether to allow network access — allow it for private networks.",
+  "settings.lanNone": "No network addresses found — this computer is offline",
+  "settings.strict": "Strict TUN routing",
+  "settings.strictHint":
+    "Blocks DNS and IPv6 leaks around the tunnel. It interferes with virtual adapters: if a Wi-Fi hotspot, Hyper-V or VMware stops working under TUN, turn this off.",
 
   "settings.subs": "Subscriptions",
   "settings.subEvery": "Refresh every",

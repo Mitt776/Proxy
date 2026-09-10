@@ -245,10 +245,20 @@ const latencyTestURL = "https://www.gstatic.com/generate_204"
 func buildInbounds(opts Options) ([]json.RawMessage, error) {
 	var in []json.RawMessage
 
+	// По умолчанию прокси слушает только loopback. AllowLAN открывает его на все
+	// интерфейсы — единственный способ отдать прокси устройствам, подключённым к
+	// раздаваемому с этой машины Wi-Fi: 127.0.0.1 им недоступен по определению, а
+	// системный прокси Windows на форвардируемый трафик не распространяется.
+	// Инверсия сюда не завозится: значение приходит уже нормализованным из
+	// настроек, где выключенное состояние и есть loopback.
+	listen := "127.0.0.1"
+	if opts.AllowLAN {
+		listen = "0.0.0.0"
+	}
 	mixed := mixedInbound{
 		Type:       "mixed",
 		Tag:        "mixed-in",
-		Listen:     "127.0.0.1",
+		Listen:     listen,
 		ListenPort: opts.MixedPort,
 	}
 	if err := appendJSON(&in, mixed); err != nil {
@@ -261,9 +271,13 @@ func buildInbounds(opts Options) ([]json.RawMessage, error) {
 			Tag:  "tun-in",
 			// Только IPv4: IPv6 в туннеле отключаем, т.к. большинство нод не имеют
 			// IPv6-выхода и трафик к dual-stack сайтам (Google) уходит в никуда.
-			Address:                []string{"172.19.0.1/30"},
-			AutoRoute:              true,
-			StrictRoute:            true,
+			Address:   []string{"172.19.0.1/30"},
+			AutoRoute: true,
+			// strict_route на Windows — фильтры WFP против утечек DNS и IPv6 мимо
+			// туннеля. Они же мешают виртуальным адаптерам (раздача Wi-Fi через ICS,
+			// Hyper-V, VMware), поэтому пользователь может их снять; по умолчанию
+			// поле остаётся true.
+			StrictRoute:            !opts.NoStrictRoute,
 			Stack:                  opts.TUNStack,
 			MTU:                    9000,
 			EndpointIndependentNAT: true,

@@ -25,6 +25,51 @@ func (c *Core) SetBlockQUIC(block bool) error {
 	return c.settings.Update(func(s *settings.Settings) { s.AllowQUIC = !block })
 }
 
+// SetAllowLAN открывает (или закрывает) локальный прокси для остальной сети.
+//
+// В отличие от резки QUIC применяется сразу: поменялся адрес прослушивания
+// mixed-инбаунда, а значит и конфиг ядра. Ждать переподключения тут особенно
+// вредно — пользователь включает настройку ровно тогда, когда рядом стоит
+// устройство, которому прокси нужен прямо сейчас.
+func (c *Core) SetAllowLAN(allow bool) error {
+	prev := c.GetSettings().AllowLAN
+	return c.applySetting(
+		func(s *settings.Settings) { s.AllowLAN = allow },
+		func(s *settings.Settings) { s.AllowLAN = prev },
+	)
+}
+
+// SetStrictRoute включает/выключает строгую маршрутизацию tun-инбаунда.
+// Смысл поля — в settings.DisableStrictRoute: аргумент здесь прямой, чтобы UI
+// не пришлось держать инверсию у себя.
+func (c *Core) SetStrictRoute(strict bool) error {
+	prev := c.GetSettings().DisableStrictRoute
+	return c.applySetting(
+		func(s *settings.Settings) { s.DisableStrictRoute = !strict },
+		func(s *settings.Settings) { s.DisableStrictRoute = prev },
+	)
+}
+
+// applySetting меняет настройку, влияющую на конфиг ядра, и сразу применяет её к
+// живому соединению. Если ядро новый конфиг не приняло (скажем, порт 2080 занят
+// на внешнем интерфейсе), настройка откатывается вторым колбэком: иначе на диске
+// осело бы значение, о котором работающее ядро не знает, — та же причина, по
+// которой правила правятся через withRouting. Откат точечный, а не восстановление
+// снимка целиком: параллельная смена языка или уровня журнала не должна пропасть.
+func (c *Core) applySetting(mutate, rollback func(*settings.Settings)) error {
+	if c.settings == nil {
+		return CodedErr(ErrNotReady, "настройки недоступны")
+	}
+	if err := c.settings.Update(mutate); err != nil {
+		return err
+	}
+	if err := c.ApplyRouting(); err != nil {
+		_ = c.settings.Update(rollback)
+		return err
+	}
+	return nil
+}
+
 // RememberTUN запоминает выбранный режим перехвата на будущие запуски. Пишется
 // только после того, как подключение действительно состоялось: сохранённый «TUN»
 // при неудачном старте заставлял бы автозапуск и трей каждый раз лезть за правами

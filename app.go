@@ -15,9 +15,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -639,6 +641,24 @@ func (a *App) GetSettings() settings.Settings { return a.core.GetSettings() }
 
 // SetBlockQUIC включает/выключает резку QUIC в TUN.
 func (a *App) SetBlockQUIC(block bool) error { return a.core.SetBlockQUIC(block) }
+
+// SetAllowLAN открывает локальный прокси остальным устройствам сети.
+func (a *App) SetAllowLAN(allow bool) error { return a.core.SetAllowLAN(allow) }
+
+// SetStrictRoute включает/выключает строгую маршрутизацию TUN.
+func (a *App) SetStrictRoute(strict bool) error { return a.core.SetStrictRoute(strict) }
+
+// LANProxyAddresses возвращает адреса вида 192.168.1.5:2080 — то, что вписывают в
+// настройки прокси на телефоне, когда включён AllowLAN. Метод платформенный:
+// список интерфейсов берётся у Windows, на Android его брать неоткуда.
+func (a *App) LANProxyAddresses() []string {
+	addrs := system.LANAddresses()
+	out := make([]string, 0, len(addrs))
+	for _, ip := range addrs {
+		out = append(out, net.JoinHostPort(ip, strconv.Itoa(a.core.MixedPort())))
+	}
+	return out
+}
 
 // SetSubUpdateHours задаёт интервал автообновления подписок (0 — выключить).
 func (a *App) SetSubUpdateHours(hours int) error { return a.core.SetSubUpdateHours(hours) }

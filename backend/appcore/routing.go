@@ -29,7 +29,11 @@ func (c *Core) ConfigOptions(nodes []config.Node, enableTUN bool) config.Options
 		Routing:      routing,
 		Mode:         cr.Mode,
 		BlockQUIC:    !cr.AllowQUIC,
-		CacheDBPath:  "cache.db",
+		AllowLAN:     cr.AllowLAN,
+		// Инверсия сохраняется до самого конфига: и в настройках, и в Options
+		// нулевое значение означает «строгая маршрутизация включена».
+		NoStrictRoute: cr.DisableStrictRoute,
+		CacheDBPath:   "cache.db",
 		// На Windows список всегда пуст: приложения «мимо VPN» существуют только
 		// там, где туннель выдаёт VpnService.
 		ExcludePackage: cr.ExcludedApps,
